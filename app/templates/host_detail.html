@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>hAI.BackupServer - {{ host.host_name }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>🗄️ hAI.BackupServer</h1>
+  <a class="btn secondary" href="/">← Zurueck</a>
+</header>
+<main>
+  <div class="card">
+    <h2>{{ host.host_name }} <span class="pill">Host-ID {{ host.host_id }}</span></h2>
+    <p class="muted">NAS-Mount: <code>{{ host.nas_mount }}</code></p>
+
+    <h3>Container</h3>
+    <ul>
+      {% for c in host.containers %}
+      <li>{{ c.name }} &mdash; <span class="muted">{{ c.volume_source_path or "kein Volume" }}</span></li>
+      {% endfor %}
+    </ul>
+
+    <h3>DB-Container</h3>
+    <ul>
+      {% for db in host.db_containers %}
+      <li>{{ db.name }} (User: {{ db.db_user }})</li>
+      {% else %}
+      <li class="muted">keine</li>
+      {% endfor %}
+    </ul>
+
+    <div class="row" style="margin-top:1.5rem;">
+      <a class="btn" href="/script/{{ host.host_id }}" target="_blank">Backup-Script anzeigen</a>
+      <a class="btn secondary" href="/bootstrap/{{ host.host_id }}" target="_blank">Bootstrap-Script anzeigen</a>
+      <a class="btn secondary" href="/hosts/{{ host.host_id }}/edit">Bearbeiten</a>
+    </div>
+
+    <h3 style="margin-top:2rem;">Einmaliger Rollout-Befehl</h3>
+    <pre>curl -fsSL http://{{ orchestrator_host }}:8080/bootstrap/{{ host.host_id }} -o bootstrap.sh
+chmod +x bootstrap.sh
+sudo ./bootstrap.sh</pre>
+  </div>
+</main>
+</body>
+</html>

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+app/config/hosts.yml
+app/generated/
+.env
+.DS_Store

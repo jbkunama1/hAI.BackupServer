@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  backup-orchestrator:
+    build: .
+    container_name: backup-orchestrator
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - TZ=Europe/Berlin
+    volumes:
+      - ./app/config:/app/config          # hosts.yml lebt hier, bleibt beim Rebuild erhalten
+      - ./app/templates:/app/templates    # full_backup_template.sh.j2 etc. editierbar von aussen
+      - generated_scripts:/app/generated  # generierte Host-Scripte
+
+  filebrowser:
+    image: filebrowser/filebrowser:latest
+    container_name: filebrowser
+    restart: unless-stopped
+    ports:
+      - "4455:80"
+    environment:
+      - TZ=Europe/Berlin
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      # Pfad anpassen: Root des SMB-Shares "highfishNAS25" auf 192.168.178.26
+      - /mnt/highfishNAS25/Sicherung:/srv:rw
+      - filebrowser_config:/config
+      - filebrowser_db:/database
+
+volumes:
+  generated_scripts:
+  filebrowser_config:
+  filebrowser_db:

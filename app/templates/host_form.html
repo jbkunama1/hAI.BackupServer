@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>hAI.BackupServer - Host {{ "bearbeiten" if host else "anlegen" }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>🗄️ hAI.BackupServer</h1>
+  <a class="btn secondary" href="/">← Zurueck</a>
+</header>
+<main>
+  <div class="card">
+    <h2>Host {{ "bearbeiten" if host else "anlegen" }}</h2>
+    <form method="post" action="{{ action_url }}">
+      <label>Hostname
+        <input type="text" name="host_name" value="{{ host.host_name if host else '' }}" required>
+      </label>
+      <label>Host-ID (kurz, eindeutig, z.B. 5)
+        <input type="text" name="host_id" value="{{ host.host_id if host else '' }}" required {{ 'readonly' if host else '' }}>
+      </label>
+      <label>NAS-Mount-Name
+        <input type="text" name="nas_mount" value="{{ host.nas_mount if host else nas_mount_default }}" required>
+      </label>
+      <label>Container (ein Eintrag pro Zeile: name;volume_source_path)
+        <textarea name="containers_raw" rows="5" placeholder="homeassistant;/mnt/dietpi_userdata/docker-data/volumes/homeassistant_config/_data">{{ containers_raw if containers_raw else '' }}</textarea>
+      </label>
+      <label>DB-Container (ein Eintrag pro Zeile: name;db_user)
+        <textarea name="db_containers_raw" rows="3" placeholder="hai_anythingmcp_postgres;postgres">{{ db_containers_raw if db_containers_raw else '' }}</textarea>
+      </label>
+      <div class="row" style="margin-top:1.5rem;">
+        <button class="btn" type="submit">Speichern &amp; Script generieren</button>
+      </div>
+    </form>
+  </div>
+</main>
+</body>
+</html>

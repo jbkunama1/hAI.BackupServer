@@ -1,0 +1,110 @@
+#!/bin/bash
+###############################################################################
+# hAI.FullBackupScript - AUTOMATISCH GENERIERT von hAI.BackupServer
+#
+# Host:        {{ host_name }}
+# Host-ID:     {{ host_id }}
+# NAS-Mount:   {{ nas_mount }}
+# Generiert:   {{ generated_at }}
+#
+# NICHT MANUELL BEARBEITEN - Aenderungen gehen beim naechsten Rollout verloren.
+# Aenderungen bitte im Web-UI unter http://{{ orchestrator_host }}:8080/hosts/{{ host_id }}
+# vornehmen und den Host anschliessend neu bootstrappen bzw. das Script neu ziehen.
+###############################################################################
+
+set -euo pipefail
+
+### --- Konfiguration (aus hosts.yml generiert) -----------------------------
+HOSTNAME="{{ host_name }}"
+HOST_ID="{{ host_id }}"
+NAS_MOUNT="{{ nas_mount }}"
+NAS_BASE_PATH="{{ nas_base_path }}"
+BACKUP_DEST="${NAS_BASE_PATH}/${HOSTNAME}"
+TIMESTAMP="$(date +%Y-%m-%d_%H-%M-%S)"
+LOGFILE="/var/log/backup_${HOST_ID}.log"
+
+ENABLE_NOTIFICATIONS={{ "true" if notifications_enabled else "false" }}
+NOTIFY_METHOD="{{ notification_method }}"
+NTFY_TOPIC="{{ ntfy_topic }}"
+NTFY_SERVER="{{ ntfy_server }}"
+EMAIL_TO="{{ email_to }}"
+
+ENABLE_VERSIONING={{ "true" if versioning_enabled else "false" }}
+VERSION_KEEP_COUNT={{ versioning_keep_count }}
+
+mkdir -p "${BACKUP_DEST}"
+
+log() {
+  echo "[$(date +%Y-%m-%d\ %H:%M:%S)] $*" | tee -a "${LOGFILE}"
+}
+
+notify() {
+  local status="$1"
+  local message="$2"
+  [ "${ENABLE_NOTIFICATIONS}" = "true" ] || return 0
+  if [ "${NOTIFY_METHOD}" = "ntfy" ]; then
+    curl -fsSL -H "Title: Backup ${HOSTNAME} - ${status}" \
+      -d "${message}" "${NTFY_SERVER}/${NTFY_TOPIC}" >/dev/null 2>&1 || true
+  elif [ "${NOTIFY_METHOD}" = "email" ] && [ -n "${EMAIL_TO}" ]; then
+    echo "${message}" | mail -s "Backup ${HOSTNAME} - ${status}" "${EMAIL_TO}" || true
+  fi
+}
+
+trap 'log "FEHLER in Zeile $LINENO"; notify "FEHLER" "Backup auf ${HOSTNAME} in Zeile $LINENO fehlgeschlagen."; exit 1' ERR
+
+log "=== Start Backup ${HOSTNAME} (Host-ID ${HOST_ID}) ==="
+
+### --- Zielverzeichnis (optional versioniert) -------------------------------
+if [ "${ENABLE_VERSIONING}" = "true" ]; then
+  RUN_DEST="${BACKUP_DEST}/${TIMESTAMP}"
+  mkdir -p "${RUN_DEST}"
+else
+  RUN_DEST="${BACKUP_DEST}/current"
+  mkdir -p "${RUN_DEST}"
+fi
+
+{% for c in containers %}
+### --- Container: {{ c.name }} ----------------------------------------------
+log "Sichere Container {{ c.name }} (Image + Volume)"
+
+if docker inspect "{{ c.name }}" >/dev/null 2>&1; then
+  IMAGE_TAG="{{ c.name }}_backup:${TIMESTAMP}"
+  docker commit "{{ c.name }}" "${IMAGE_TAG}" >/dev/null
+  docker save "${IMAGE_TAG}" | gzip > "${RUN_DEST}/{{ c.name }}_image_${TIMESTAMP}.tar.gz"
+  docker rmi "${IMAGE_TAG}" >/dev/null || true
+else
+  log "WARNUNG: Container {{ c.name }} nicht gefunden - Image-Sicherung uebersprungen"
+fi
+
+{% if c.volume_source_path %}
+mkdir -p "${RUN_DEST}/{{ c.name }}_data"
+rsync -a --delete "{{ c.volume_source_path }}/" "${RUN_DEST}/{{ c.name }}_data/"
+{% endif %}
+{% endfor %}
+
+{% for db in db_containers %}
+### --- Datenbank-Dump: {{ db.name }} ----------------------------------------
+log "Erzeuge DB-Dump fuer {{ db.name }}"
+if docker inspect "{{ db.name }}" >/dev/null 2>&1; then
+  docker exec "{{ db.name }}" pg_dumpall -U "{{ db.db_user }}" \
+    > "${RUN_DEST}/{{ db.name }}_dump_${TIMESTAMP}.sql"
+  gzip -f "${RUN_DEST}/{{ db.name }}_dump_${TIMESTAMP}.sql"
+else
+  log "WARNUNG: DB-Container {{ db.name }} nicht gefunden - Dump uebersprungen"
+fi
+{% endfor %}
+
+### --- Crontab-Backup --------------------------------------------------------
+log "Sichere Crontab"
+crontab -l > "${RUN_DEST}/my_crontab_${HOST_ID}.backup" 2>/dev/null || \
+  log "Hinweis: keine Crontab fuer aktuellen User vorhanden"
+
+### --- Versionierung: alte Staende aufraeumen --------------------------------
+if [ "${ENABLE_VERSIONING}" = "true" ]; then
+  log "Bereinige alte Versionen (behalte ${VERSION_KEEP_COUNT})"
+  cd "${BACKUP_DEST}"
+  ls -1dt */ 2>/dev/null | tail -n +$((VERSION_KEEP_COUNT + 1)) | xargs -r rm -rf --
+fi
+
+log "=== Backup ${HOSTNAME} erfolgreich abgeschlossen ==="
+notify "OK" "Backup auf ${HOSTNAME} (Host-ID ${HOST_ID}) erfolgreich abgeschlossen."

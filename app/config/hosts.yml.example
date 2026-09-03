@@ -1,0 +1,41 @@
+# Zentrale Host-Konfiguration fuer hAI.BackupServer
+# Kopieren nach hosts.yml und an die eigene Umgebung anpassen.
+
+nas_mount_default: "highfishNAS25"     # Basisname des SMB-Shares
+nas_base_path: "/mnt/highfishNAS25/Sicherung"
+
+notifications:
+  enabled: false
+  method: "ntfy"        # ntfy | email
+  ntfy_topic: "hai-backup-alerts"
+  ntfy_server: "https://ntfy.sh"
+  email_to: ""
+
+versioning:
+  enabled: false
+  keep_count: 5
+
+hosts:
+  - host_name: "highfish5"
+    host_id: "5"
+    nas_mount: "highfishNAS25"
+    containers:
+      - name: "bierkaessle_bot"
+        volume_source_path: "/mnt/dietpi_userdata/docker-data/volumes/bierkaessle_bot_data/_data"
+      - name: "bierkaessle_web"
+        volume_source_path: "/mnt/dietpi_userdata/docker-data/volumes/bierkaessle_web_data/_data"
+      - name: "homeassistant"
+        volume_source_path: "/mnt/dietpi_userdata/docker-data/volumes/homeassistant_config/_data"
+      - name: "deconz_Conbee"
+        volume_source_path: "/mnt/dietpi_userdata/docker-data/volumes/deconz_data/_data"
+    db_containers: []
+
+  - host_name: "highfish10"
+    host_id: "10"
+    nas_mount: "highfishNAS25"
+    containers:
+      - name: "matchtreff_padel_web"
+        volume_source_path: "/mnt/dietpi_userdata/docker-data/volumes/matchtreff_padel_web_data/_data"
+    db_containers:
+      - name: "hai_anythingmcp_postgres"
+        db_user: "postgres"

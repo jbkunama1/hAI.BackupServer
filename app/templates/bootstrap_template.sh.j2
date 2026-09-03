@@ -1,0 +1,41 @@
+#!/bin/bash
+###############################################################################
+# hAI.BackupServer Bootstrap-Script
+# Host: {{ host_name }} (Host-ID {{ host_id }})
+#
+# Einmalig auf dem Ziel-Server ausfuehren (als root oder mit sudo):
+#   curl -fsSL http://{{ orchestrator_host }}:8080/bootstrap/{{ host_id }} -o bootstrap.sh
+#   chmod +x bootstrap.sh
+#   sudo ./bootstrap.sh
+###############################################################################
+
+set -euo pipefail
+
+ORCHESTRATOR="{{ orchestrator_host }}:8080"
+HOST_ID="{{ host_id }}"
+TARGET_DIR="/opt/backup"
+SCRIPT_NAME="full_backup_${HOST_ID}.sh"
+CRON_SCHEDULE="{{ cron_schedule }}"
+
+mkdir -p "${TARGET_DIR}"
+
+echo "[hAI.BackupServer] Hole aktuelles Backup-Script fuer Host-ID ${HOST_ID} ..."
+curl -fsSL "http://${ORCHESTRATOR}/script/${HOST_ID}" -o "${TARGET_DIR}/${SCRIPT_NAME}"
+
+chmod +x "${TARGET_DIR}/${SCRIPT_NAME}"
+
+echo "[hAI.BackupServer] Richte Cronjob ein (${CRON_SCHEDULE}) ..."
+CRON_LINE="${CRON_SCHEDULE} root ${TARGET_DIR}/${SCRIPT_NAME} >> /var/log/backup_${HOST_ID}.log 2>&1"
+
+if [ -f /etc/crontab ] && grep -q "${SCRIPT_NAME}" /etc/crontab 2>/dev/null; then
+  sed -i "/${SCRIPT_NAME//\//\\/}/d" /etc/crontab
+fi
+echo "${CRON_LINE}" >> /etc/crontab
+
+echo "[hAI.BackupServer] Testlauf (einmalig, kann etwas dauern) ..."
+"${TARGET_DIR}/${SCRIPT_NAME}" || {
+  echo "[hAI.BackupServer] Testlauf fehlgeschlagen - bitte /var/log/backup_${HOST_ID}.log pruefen."
+  exit 1
+}
+
+echo "[hAI.BackupServer] Fertig. ${HOST_ID} sichert ab sofort automatisch (${CRON_SCHEDULE})."

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>hAI.BackupServer - Uebersicht</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>🗄️ hAI.BackupServer</h1>
+  <a class="btn" href="/hosts/new">+ Neuer Host</a>
+</header>
+<main>
+  <div class="card">
+    <p class="muted">
+      NAS-Ziel: <strong>{{ nas_mount_default }}</strong> &middot;
+      Basis-Pfad: <code>{{ nas_base_path }}</code> &middot;
+      Orchestrator: <strong>{{ orchestrator_host }}:8080</strong>
+    </p>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Host</th>
+        <th>Host-ID</th>
+        <th>Container</th>
+        <th>DB-Dumps</th>
+        <th>Aktionen</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for h in hosts %}
+      <tr>
+        <td>{{ h.host_name }}</td>
+        <td><span class="pill">{{ h.host_id }}</span></td>
+        <td>{{ h.containers|length }}</td>
+        <td>{{ h.db_containers|length }}</td>
+        <td class="row">
+          <a class="btn secondary" href="/hosts/{{ h.host_id }}">Details</a>
+          <a class="btn secondary" href="/hosts/{{ h.host_id }}/edit">Bearbeiten</a>
+          <a class="btn" href="/script/{{ h.host_id }}" target="_blank">Script</a>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">Noch keine Hosts konfiguriert. Lege den ersten Host an.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</main>
+</body>
+</html>

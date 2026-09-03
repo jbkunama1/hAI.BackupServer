@@ -1,0 +1,17 @@
+body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#0f172a; color:#e2e8f0; }
+header { background:#111827; padding:1rem 2rem; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #1f2937; }
+header h1 { font-size:1.1rem; margin:0; }
+main { padding:2rem; max-width:1100px; margin:0 auto; }
+table { width:100%; border-collapse:collapse; margin-top:1rem; }
+th, td { text-align:left; padding:0.6rem 0.8rem; border-bottom:1px solid #1f2937; }
+th { color:#94a3b8; font-weight:600; font-size:0.85rem; text-transform:uppercase; }
+a.btn, button.btn { background:#2563eb; color:white; padding:0.5rem 1rem; border-radius:6px; text-decoration:none; border:none; cursor:pointer; font-size:0.9rem; }
+a.btn.secondary, button.btn.secondary { background:#334155; }
+a.btn.danger, button.btn.danger { background:#b91c1c; }
+.card { background:#1e293b; padding:1.5rem; border-radius:10px; margin-bottom:1.5rem; }
+form label { display:block; margin-top:1rem; font-size:0.85rem; color:#94a3b8; }
+form input, form textarea, form select { width:100%; padding:0.5rem; border-radius:6px; border:1px solid #334155; background:#0f172a; color:#e2e8f0; margin-top:0.25rem; }
+.pill { display:inline-block; padding:0.15rem 0.6rem; border-radius:999px; font-size:0.75rem; background:#334155; margin-right:0.3rem; }
+code, pre { background:#0f172a; padding:0.6rem; border-radius:6px; display:block; overflow-x:auto; }
+.row { display:flex; gap:1rem; flex-wrap:wrap; }
+.muted { color:#94a3b8; font-size:0.85rem; }
