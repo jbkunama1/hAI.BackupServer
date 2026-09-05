@@ -9,10 +9,28 @@ services:
       - "8080:8080"
     environment:
       - TZ=Europe/Berlin
+      - ORCHESTRATOR_HOST=${ORCHESTRATOR_HOST:-192.168.178.26}
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 3 * * *}
+      - BASIC_AUTH_USER=${BASIC_AUTH_USER:-admin}
+      - BASIC_AUTH_PASSWORD=${BASIC_AUTH_PASSWORD:?BASIC_AUTH_PASSWORD muss in .env gesetzt sein}
     volumes:
       - ./app/config:/app/config          # hosts.yml lebt hier, bleibt beim Rebuild erhalten
       - ./app/templates:/app/templates    # full_backup_template.sh.j2 etc. editierbar von aussen
       - generated_scripts:/app/generated  # generierte Host-Scripte
+
+  backup-mcp:
+    build: ./mcp_server
+    container_name: backup-mcp
+    restart: unless-stopped
+    depends_on:
+      - backup-orchestrator
+    ports:
+      - "8090:8090"
+    environment:
+      - TZ=Europe/Berlin
+      - BACKUP_API_BASE_URL=http://backup-orchestrator:8080
+      - BACKUP_API_USER=${BASIC_AUTH_USER:-admin}
+      - BACKUP_API_PASSWORD=${BASIC_AUTH_PASSWORD:?BASIC_AUTH_PASSWORD muss in .env gesetzt sein}
 
   filebrowser:
     image: filebrowser/filebrowser:latest

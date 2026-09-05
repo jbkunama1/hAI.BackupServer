@@ -52,6 +52,8 @@ def render_bootstrap_script(
     host: HostConfig,
     orchestrator_host: str,
     cron_schedule: str = "0 3 * * *",
+    basic_auth_user: str = "admin",
+    basic_auth_password: str = "",
 ) -> str:
     template = _env.get_template("bootstrap_template.sh.j2")
     return template.render(
@@ -59,4 +61,6 @@ def render_bootstrap_script(
         host_id=host.host_id,
         orchestrator_host=orchestrator_host,
         cron_schedule=cron_schedule,
+        basic_auth_user=basic_auth_user,
+        basic_auth_password=basic_auth_password,
     )

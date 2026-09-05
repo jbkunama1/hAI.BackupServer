@@ -1,17 +1,19 @@
 """hAI.BackupServer - zentrales Backup-Control-Center.
 
-Web-UI + REST-API zur Verwaltung von Backup-Hosts und automatischen
-Generierung der pro Host individuellen full_backup_<HOST_ID>.sh Scripte
-auf Basis von hAI.FullBackupScript.
+Web-UI + REST-API (mit HTTP Basic Auth) zur Verwaltung von Backup-Hosts und
+automatischen Generierung der pro Host individuellen full_backup_<HOST_ID>.sh
+Scripte auf Basis von hAI.FullBackupScript.
 """
 import os
+import secrets
 import shutil
 from pathlib import Path
 from typing import List, Optional
 
 import yaml
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -28,7 +30,38 @@ GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 ORCHESTRATOR_HOST = os.environ.get("ORCHESTRATOR_HOST", "192.168.178.26")
 CRON_SCHEDULE = os.environ.get("CRON_SCHEDULE", "0 3 * * *")
 
-app = FastAPI(title="hAI.BackupServer", version="1.0.0")
+# --------------------------------------------------------------------------
+# HTTP Basic Auth (schuetzt Web-UI, Script-/Bootstrap-Endpunkte und JSON-API)
+# --------------------------------------------------------------------------
+BASIC_AUTH_USER = os.environ.get("BASIC_AUTH_USER", "admin")
+BASIC_AUTH_PASSWORD = os.environ.get("BASIC_AUTH_PASSWORD", "")
+
+_security = HTTPBasic()
+
+
+def require_basic_auth(credentials: HTTPBasicCredentials = Depends(_security)) -> str:
+    if not BASIC_AUTH_PASSWORD:
+        # Fail-closed: ohne gesetztes Passwort ist der Server nicht nutzbar.
+        raise HTTPException(
+            status_code=500,
+            detail="BASIC_AUTH_PASSWORD ist nicht gesetzt. Bitte als Umgebungsvariable konfigurieren.",
+        )
+    correct_user = secrets.compare_digest(credentials.username, BASIC_AUTH_USER)
+    correct_pass = secrets.compare_digest(credentials.password, BASIC_AUTH_PASSWORD)
+    if not (correct_user and correct_pass):
+        raise HTTPException(
+            status_code=401,
+            detail="Ungueltige Zugangsdaten",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+
+app = FastAPI(
+    title="hAI.BackupServer",
+    version="1.1.0",
+    dependencies=[Depends(require_basic_auth)],
+)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -189,6 +222,7 @@ def host_detail(request: Request, host_id: str):
         "request": request,
         "host": host,
         "orchestrator_host": ORCHESTRATOR_HOST,
+        "basic_auth_user": BASIC_AUTH_USER,
     })
 
 
@@ -241,8 +275,9 @@ def update_host(
 # --------------------------------------------------------------------------
 # Script-/Bootstrap-Auslieferung (fuer Hosts + Agenten/MCP)
 # --------------------------------------------------------------------------
-@app.get("/script/{host_id}", response_class=PlainTextResponse)
+@app.get("/script/{host_id}", response_class=PlainTextResponse, summary="Aktuelles Backup-Script eines Hosts abrufen")
 def get_script(host_id: str):
+    """Rendert und liefert das aktuelle full_backup_<HOST_ID>.sh fuer den angegebenen Host."""
     cfg = load_config()
     host = find_host(cfg, host_id)
     if not host:
@@ -251,27 +286,35 @@ def get_script(host_id: str):
     return PlainTextResponse(script_path.read_text(encoding="utf-8"), media_type="text/x-shellscript")
 
 
-@app.get("/bootstrap/{host_id}", response_class=PlainTextResponse)
+@app.get("/bootstrap/{host_id}", response_class=PlainTextResponse, summary="Bootstrap-Script fuer einen neuen Host abrufen")
 def get_bootstrap(host_id: str):
+    """Liefert das einmalig auf einem neuen Server auszufuehrende Bootstrap-Script."""
     cfg = load_config()
     host = find_host(cfg, host_id)
     if not host:
         raise HTTPException(404, f"Host-ID {host_id} nicht konfiguriert")
-    script = render_bootstrap_script(host, ORCHESTRATOR_HOST, CRON_SCHEDULE)
+    script = render_bootstrap_script(
+        host, ORCHESTRATOR_HOST, CRON_SCHEDULE,
+        basic_auth_user=BASIC_AUTH_USER,
+        basic_auth_password=BASIC_AUTH_PASSWORD,
+    )
     return PlainTextResponse(script, media_type="text/x-shellscript")
 
 
 # --------------------------------------------------------------------------
-# JSON-API (fuer MCP-Tools / Agenten)
+# JSON-API (fuer MCP-Tools / Agenten) - jeder Endpoint einzeln dokumentiert,
+# damit ein MCP-/OpenAPI-Import saubere Tool-Namen und Beschreibungen erzeugt.
 # --------------------------------------------------------------------------
-@app.get("/api/hosts")
+@app.get("/api/hosts", summary="Alle Backup-Hosts auflisten", tags=["backup-hosts"])
 def api_list_hosts():
+    """Gibt alle in hosts.yml konfigurierten Backup-Hosts zurueck."""
     cfg = load_config()
     return {"hosts": [h.to_dict() for h in get_hosts(cfg)]}
 
 
-@app.get("/api/hosts/{host_id}")
+@app.get("/api/hosts/{host_id}", summary="Details zu einem Backup-Host", tags=["backup-hosts"])
 def api_get_host(host_id: str):
+    """Gibt Hostname, NAS-Mount, Container und DB-Container eines Hosts zurueck."""
     cfg = load_config()
     host = find_host(cfg, host_id)
     if not host:
@@ -279,8 +322,9 @@ def api_get_host(host_id: str):
     return host.to_dict()
 
 
-@app.post("/api/hosts")
+@app.post("/api/hosts", summary="Backup-Host anlegen oder aktualisieren", tags=["backup-hosts"])
 def api_create_or_update_host(payload: dict):
+    """Legt einen Host an oder aktualisiert ihn (per host_id) und generiert sofort das Backup-Script."""
     cfg = load_config()
     host = HostConfig.from_dict(payload)
     upsert_host(cfg, host)
@@ -289,8 +333,9 @@ def api_create_or_update_host(payload: dict):
     return {"status": "ok", "host": host.to_dict()}
 
 
-@app.post("/api/hosts/{host_id}/regenerate")
+@app.post("/api/hosts/{host_id}/regenerate", summary="Backup-Script neu generieren", tags=["backup-hosts"])
 def api_regenerate_script(host_id: str):
+    """Erzwingt die Neugenerierung des Backup-Scripts fuer einen Host (z.B. nach Config-Aenderung)."""
     cfg = load_config()
     host = find_host(cfg, host_id)
     if not host:
@@ -299,6 +344,6 @@ def api_regenerate_script(host_id: str):
     return {"status": "ok", "script_path": str(path)}
 
 
-@app.get("/api/health")
+@app.get("/api/health", summary="Health-Check", tags=["system"])
 def health():
     return {"status": "ok", "service": "hAI.BackupServer"}

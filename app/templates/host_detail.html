@@ -38,7 +38,8 @@
     </div>
 
     <h3 style="margin-top:2rem;">Einmaliger Rollout-Befehl</h3>
-    <pre>curl -fsSL http://{{ orchestrator_host }}:8080/bootstrap/{{ host.host_id }} -o bootstrap.sh
+    <p class="muted">Basic-Auth-Benutzer: <strong>{{ basic_auth_user }}</strong> (Passwort separat einsetzen, wird hier nicht angezeigt).</p>
+    <pre>curl -fsSL -u "{{ basic_auth_user }}:&lt;PASSWORT&gt;" http://{{ orchestrator_host }}:8080/bootstrap/{{ host.host_id }} -o bootstrap.sh
 chmod +x bootstrap.sh
 sudo ./bootstrap.sh</pre>
   </div>

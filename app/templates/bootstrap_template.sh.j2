@@ -4,9 +4,14 @@
 # Host: {{ host_name }} (Host-ID {{ host_id }})
 #
 # Einmalig auf dem Ziel-Server ausfuehren (als root oder mit sudo):
-#   curl -fsSL http://{{ orchestrator_host }}:8080/bootstrap/{{ host_id }} -o bootstrap.sh
+#   curl -fsSL -u "{{ basic_auth_user }}:<PASSWORT>" \
+#     http://{{ orchestrator_host }}:8080/bootstrap/{{ host_id }} -o bootstrap.sh
 #   chmod +x bootstrap.sh
 #   sudo ./bootstrap.sh
+#
+# HINWEIS: Dieses generierte Script enthaelt das aktuell konfigurierte
+# Basic-Auth-Passwort im Klartext (fuer den automatischen curl-Aufruf noetig).
+# Nur ueber vertrauenswuerdige Kanaele im LAN abrufen/aufbewahren.
 ###############################################################################
 
 set -euo pipefail
@@ -16,11 +21,14 @@ HOST_ID="{{ host_id }}"
 TARGET_DIR="/opt/backup"
 SCRIPT_NAME="full_backup_${HOST_ID}.sh"
 CRON_SCHEDULE="{{ cron_schedule }}"
+AUTH_USER="{{ basic_auth_user }}"
+AUTH_PASSWORD="{{ basic_auth_password }}"
 
 mkdir -p "${TARGET_DIR}"
 
 echo "[hAI.BackupServer] Hole aktuelles Backup-Script fuer Host-ID ${HOST_ID} ..."
-curl -fsSL "http://${ORCHESTRATOR}/script/${HOST_ID}" -o "${TARGET_DIR}/${SCRIPT_NAME}"
+curl -fsSL -u "${AUTH_USER}:${AUTH_PASSWORD}" \
+  "http://${ORCHESTRATOR}/script/${HOST_ID}" -o "${TARGET_DIR}/${SCRIPT_NAME}"
 
 chmod +x "${TARGET_DIR}/${SCRIPT_NAME}"
 
