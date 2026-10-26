@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   backup-orchestrator:
-    build: .
+    image: ghcr.io/jbkunama1/hai.backupserver-orchestrator:latest
     container_name: backup-orchestrator
     restart: unless-stopped
     networks:
@@ -21,7 +21,7 @@ services:
       - generated_scripts:/app/generated  # generierte Host-Scripte
 
   backup-mcp:
-    build: ./mcp_server
+    image: ghcr.io/jbkunama1/hai.backupserver-mcp:latest
     container_name: backup-mcp
     restart: unless-stopped
     depends_on:
