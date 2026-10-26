@@ -17,7 +17,6 @@ services:
       - BASIC_AUTH_PASSWORD=${BASIC_AUTH_PASSWORD:?BASIC_AUTH_PASSWORD muss in .env gesetzt sein}
     volumes:
       - ./app/config:/app/config          # hosts.yml + reports.json leben hier, bleiben beim Rebuild erhalten
-      - ./app/templates:/app/templates    # full_backup_template.sh.j2 etc. editierbar von aussen
       - generated_scripts:/app/generated  # generierte Host-Scripte
 
   backup-mcp:
