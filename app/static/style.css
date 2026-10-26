@@ -12,6 +12,8 @@ a.btn.danger, button.btn.danger { background:#b91c1c; }
 form label { display:block; margin-top:1rem; font-size:0.85rem; color:#94a3b8; }
 form input, form textarea, form select { width:100%; padding:0.5rem; border-radius:6px; border:1px solid #334155; background:#0f172a; color:#e2e8f0; margin-top:0.25rem; }
 .pill { display:inline-block; padding:0.15rem 0.6rem; border-radius:999px; font-size:0.75rem; background:#334155; margin-right:0.3rem; }
+.pill.ok { background:#15803d; color:#f0fdf4; }
+.pill.err { background:#b91c1c; color:#fef2f2; }
 code, pre { background:#0f172a; padding:0.6rem; border-radius:6px; display:block; overflow-x:auto; }
 .row { display:flex; gap:1rem; flex-wrap:wrap; }
 .muted { color:#94a3b8; font-size:0.85rem; }

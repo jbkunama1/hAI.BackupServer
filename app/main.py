@@ -4,9 +4,11 @@ Web-UI + REST-API (mit HTTP Basic Auth) zur Verwaltung von Backup-Hosts und
 automatischen Generierung der pro Host individuellen full_backup_<HOST_ID>.sh
 Scripte auf Basis von hAI.FullBackupScript.
 """
+import json
 import os
 import secrets
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -17,13 +19,14 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from models import ContainerConfig, DbContainerConfig, HostConfig
+from models import BackupReport, ContainerConfig, DbContainerConfig, HostConfig
 from script_generator import render_backup_script, render_bootstrap_script
 
 BASE_DIR = Path(__file__).parent
 CONFIG_DIR = BASE_DIR / "config"
 CONFIG_FILE = CONFIG_DIR / "hosts.yml"
 CONFIG_EXAMPLE = CONFIG_DIR / "hosts.yml.example"
+REPORTS_FILE = CONFIG_DIR / "reports.json"
 GENERATED_DIR = Path(os.environ.get("GENERATED_DIR", "/app/generated"))
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -59,7 +62,7 @@ def require_basic_auth(credentials: HTTPBasicCredentials = Depends(_security)) -
 
 app = FastAPI(
     title="hAI.BackupServer",
-    version="1.1.0",
+    version="1.2.0",
     dependencies=[Depends(require_basic_auth)],
 )
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -91,6 +94,34 @@ def load_config() -> dict:
 def save_config(cfg: dict) -> None:
     with open(CONFIG_FILE, "w", encoding="utf-8") as fh:
         yaml.safe_dump(cfg, fh, allow_unicode=True, sort_keys=False)
+
+
+# --------------------------------------------------------------------------
+# Monitoring: Backup-Reports (letztes Ergebnis pro Host)
+# --------------------------------------------------------------------------
+def load_reports() -> dict:
+    if not REPORTS_FILE.exists():
+        return {"reports": {}}
+    try:
+        data = json.loads(REPORTS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"reports": {}}
+    if not isinstance(data.get("reports"), dict):
+        data = {"reports": {}}
+    return data
+
+
+def save_reports(data: dict) -> None:
+    tmp = REPORTS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(REPORTS_FILE)
+
+
+def get_last_report(data: dict, host_id: str) -> Optional[BackupReport]:
+    entry = data.get("reports", {}).get(str(host_id))
+    if not entry:
+        return None
+    return BackupReport.from_dict(entry)
 
 
 def get_hosts(cfg: dict) -> List[HostConfig]:
@@ -153,6 +184,8 @@ def _write_generated_script(host: HostConfig, cfg: dict) -> Path:
         versioning_enabled=vers.get("enabled", False),
         versioning_keep_count=vers.get("keep_count", 5),
         orchestrator_host=ORCHESTRATOR_HOST,
+        report_user=BASIC_AUTH_USER,
+        report_password=BASIC_AUTH_PASSWORD,
     )
     out_path = GENERATED_DIR / f"full_backup_{host.host_id}.sh"
     out_path.write_text(script, encoding="utf-8")
@@ -166,9 +199,11 @@ def _write_generated_script(host: HostConfig, cfg: dict) -> Path:
 def dashboard(request: Request):
     cfg = load_config()
     hosts = get_hosts(cfg)
+    reports = load_reports().get("reports", {})
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "hosts": hosts,
+        "reports": reports,
         "nas_mount_default": cfg.get("nas_mount_default", "highfishNAS25"),
         "nas_base_path": cfg.get("nas_base_path", "/mnt/highfishNAS25/Sicherung"),
         "orchestrator_host": ORCHESTRATOR_HOST,
@@ -221,6 +256,8 @@ def host_detail(request: Request, host_id: str):
     return templates.TemplateResponse("host_detail.html", {
         "request": request,
         "host": host,
+        "report": (get_last_report(load_reports(), host_id) or BackupReport(
+            host_id=host_id, status="none")).to_dict(),
         "orchestrator_host": ORCHESTRATOR_HOST,
         "basic_auth_user": BASIC_AUTH_USER,
     })
@@ -342,6 +379,57 @@ def api_regenerate_script(host_id: str):
         raise HTTPException(404, f"Host-ID {host_id} nicht konfiguriert")
     path = _write_generated_script(host, cfg)
     return {"status": "ok", "script_path": str(path)}
+
+
+# --------------------------------------------------------------------------
+# Monitoring-API: Reports entgegennehmen und auslesen
+# --------------------------------------------------------------------------
+@app.post("/api/hosts/{host_id}/report", summary="Backup-Ergebnis eines Hosts melden", tags=["monitoring"])
+def api_report_backup(host_id: str, payload: dict):
+    """Speichert den Ergebnis-Report (status ok/error, exit_code, duration_seconds,
+    size_bytes, message) eines abgeschlossenen Backup-Laufs. Wird von den
+    generierten full_backup_<HOST_ID>.sh Scripten per ERR-Trap bzw. Endmeldung
+    automatisch aufgerufen."""
+    cfg = load_config()
+    host = find_host(cfg, host_id)
+    if not host:
+        raise HTTPException(404, f"Host-ID {host_id} nicht konfiguriert")
+    status = str(payload.get("status", "")).lower()
+    if status not in ("ok", "error"):
+        raise HTTPException(400, "status muss 'ok' oder 'error' sein")
+    report = BackupReport(
+        host_id=host.host_id,
+        status=status,
+        exit_code=int(payload.get("exit_code", 0)),
+        duration_seconds=float(payload.get("duration_seconds", 0)),
+        size_bytes=int(payload.get("size_bytes", 0)),
+        message=str(payload.get("message", "")),
+        reported_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+    data = load_reports()
+    data.setdefault("reports", {})[host.host_id] = report.to_dict()
+    save_reports(data)
+    return {"status": "ok", "report": report.to_dict()}
+
+
+@app.get("/api/hosts/{host_id}/report", summary="Letzten Backup-Report eines Hosts abrufen", tags=["monitoring"])
+def api_get_backup_report(host_id: str):
+    """Gibt den zuletzt gemeldeten Backup-Report eines Hosts zurueck
+    (404, wenn noch nie ein Report einging)."""
+    cfg = load_config()
+    host = find_host(cfg, host_id)
+    if not host:
+        raise HTTPException(404, f"Host-ID {host_id} nicht konfiguriert")
+    report = get_last_report(load_reports(), host_id)
+    if not report:
+        raise HTTPException(404, f"Fuer Host-ID {host_id} liegt noch kein Report vor")
+    return report.to_dict()
+
+
+@app.get("/api/reports", summary="Letzte Backup-Reports aller Hosts abrufen", tags=["monitoring"])
+def api_list_reports():
+    """Gibt pro Host den jeweils letzten eingehenden Backup-Report zurueck."""
+    return load_reports()
 
 
 @app.get("/api/health", summary="Health-Check", tags=["system"])
