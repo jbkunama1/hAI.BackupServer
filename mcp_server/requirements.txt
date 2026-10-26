@@ -1,2 +1,4 @@
 mcp[cli]==1.2.1
 requests==2.32.3
+# MCP 1.2.1 imports eval_type_backport from Pydantic internals.
+pydantic==2.10.6
