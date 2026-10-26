@@ -5,6 +5,8 @@ services:
     build: .
     container_name: backup-orchestrator
     restart: unless-stopped
+    networks:
+      - highfishNetwork
     ports:
       - "8080:8080"
     environment:
@@ -14,7 +16,7 @@ services:
       - BASIC_AUTH_USER=${BASIC_AUTH_USER:-admin}
       - BASIC_AUTH_PASSWORD=${BASIC_AUTH_PASSWORD:?BASIC_AUTH_PASSWORD muss in .env gesetzt sein}
     volumes:
-      - ./app/config:/app/config          # hosts.yml lebt hier, bleibt beim Rebuild erhalten
+      - ./app/config:/app/config          # hosts.yml + reports.json leben hier, bleiben beim Rebuild erhalten
       - ./app/templates:/app/templates    # full_backup_template.sh.j2 etc. editierbar von aussen
       - generated_scripts:/app/generated  # generierte Host-Scripte
 
@@ -24,6 +26,8 @@ services:
     restart: unless-stopped
     depends_on:
       - backup-orchestrator
+    networks:
+      - highfishNetwork
     ports:
       - "8090:8090"
     environment:
@@ -36,6 +40,8 @@ services:
     image: filebrowser/filebrowser:latest
     container_name: filebrowser
     restart: unless-stopped
+    networks:
+      - highfishNetwork
     ports:
       - "4455:80"
     environment:
@@ -51,3 +57,9 @@ volumes:
   generated_scripts:
   filebrowser_config:
   filebrowser_db:
+
+# Alle Services haengen am externen Docker-Netzwerk highfishNetwork
+# (muss auf dem Host existieren: docker network create highfishNetwork)
+networks:
+  highfishNetwork:
+    external: true

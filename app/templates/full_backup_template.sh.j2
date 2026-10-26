@@ -22,6 +22,7 @@ NAS_BASE_PATH="{{ nas_base_path }}"
 BACKUP_DEST="${NAS_BASE_PATH}/${HOSTNAME}"
 TIMESTAMP="$(date +%Y-%m-%d_%H-%M-%S)"
 LOGFILE="/var/log/backup_${HOST_ID}.log"
+START_TS="$(date +%s)"
 
 ENABLE_NOTIFICATIONS={{ "true" if notifications_enabled else "false" }}
 NOTIFY_METHOD="{{ notification_method }}"
@@ -31,6 +32,11 @@ EMAIL_TO="{{ email_to }}"
 
 ENABLE_VERSIONING={{ "true" if versioning_enabled else "false" }}
 VERSION_KEEP_COUNT={{ versioning_keep_count }}
+
+### --- Monitoring: Report an den Orchestrator -------------------------------
+REPORT_URL="http://{{ orchestrator_host }}:8080/api/hosts/{{ host_id }}/report"
+REPORT_USER="{{ report_user }}"
+REPORT_PASSWORD="{{ report_password }}"
 
 mkdir -p "${BACKUP_DEST}"
 
@@ -50,7 +56,28 @@ notify() {
   fi
 }
 
-trap 'log "FEHLER in Zeile $LINENO"; notify "FEHLER" "Backup auf ${HOSTNAME} in Zeile $LINENO fehlgeschlagen."; exit 1' ERR
+report() {
+  # Meldet den Lauf an den Orchestrator. NIEMALS das Backup blockieren:
+  # alle Schritte sind fehlertolerant (|| true / Fallbacks).
+  local status="$1"
+  local exit_code="$2"
+  local message="$3"
+  local end_ts duration size_bytes
+  end_ts="$(date +%s)"
+  duration=$((end_ts - START_TS))
+  size_bytes=0
+  if [ -n "${RUN_DEST:-}" ] && [ -d "${RUN_DEST}" ]; then
+    size_bytes="$(du -sb "${RUN_DEST}" 2>/dev/null | cut -f1 || echo 0)"
+    size_bytes="${size_bytes:-0}"
+  fi
+  curl -fsSL -m 15 -u "${REPORT_USER}:${REPORT_PASSWORD}" \
+    -H "Content-Type: application/json" \
+    -d "$(printf '{"status":"%s","exit_code":%s,"duration_seconds":%s,"size_bytes":%s,"message":"%s"}' \
+      "${status}" "${exit_code}" "${duration}" "${size_bytes}" "${message}")" \
+    "${REPORT_URL}" >/dev/null 2>&1 || true
+}
+
+trap 'rc=$?; log "FEHLER in Zeile $LINENO (Exit $rc)"; notify "FEHLER" "Backup auf ${HOSTNAME} in Zeile $LINENO fehlgeschlagen (Exit $rc)."; report "error" "${rc}" "Backup in Zeile ${LINENO} fehlgeschlagen (Exit ${rc})"; exit ${rc}' ERR
 
 log "=== Start Backup ${HOSTNAME} (Host-ID ${HOST_ID}) ==="
 
@@ -108,3 +135,4 @@ fi
 
 log "=== Backup ${HOSTNAME} erfolgreich abgeschlossen ==="
 notify "OK" "Backup auf ${HOSTNAME} (Host-ID ${HOST_ID}) erfolgreich abgeschlossen."
+report "ok" "0" "Backup ${HOSTNAME} erfolgreich abgeschlossen."

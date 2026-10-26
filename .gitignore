@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 app/config/hosts.yml
+app/config/reports.json
 app/generated/
 .env
 .DS_Store

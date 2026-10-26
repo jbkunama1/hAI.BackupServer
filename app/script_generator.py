@@ -27,6 +27,8 @@ def render_backup_script(
     versioning_enabled: bool,
     versioning_keep_count: int,
     orchestrator_host: str,
+    report_user: str = "",
+    report_password: str = "",
 ) -> str:
     template = _env.get_template("full_backup_template.sh.j2")
     return template.render(
@@ -44,6 +46,8 @@ def render_backup_script(
         versioning_enabled=versioning_enabled,
         versioning_keep_count=versioning_keep_count,
         orchestrator_host=orchestrator_host,
+        report_user=report_user,
+        report_password=report_password,
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
 
