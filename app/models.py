@@ -2,17 +2,49 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+import validation as v
+
 
 @dataclass
 class ContainerConfig:
     name: str
-    volume_source_path: Optional[str] = None
+    volume_source_path: Optional[str] = None      # Altformat (ein Pfad)
+    volume_paths: List[str] = field(default_factory=list)
+
+    def all_paths(self) -> List[str]:
+        seen, out = set(), []
+        for p in ([self.volume_source_path] if self.volume_source_path else []) + list(self.volume_paths):
+            if p and p not in seen:
+                seen.add(p)
+                out.append(p)
+        return out
+
+    def to_dict(self) -> dict:
+        """Alt-Hosts bleiben im alten Format (nur name + volume_source_path) lesbar."""
+        d = {"name": self.name}
+        if self.volume_source_path:
+            d["volume_source_path"] = self.volume_source_path
+        if self.volume_paths:
+            d["volume_paths"] = list(self.volume_paths)
+        return d
+
+    @staticmethod
+    def from_dict(d: dict) -> "ContainerConfig":
+        return ContainerConfig(
+            name=d["name"],
+            volume_source_path=d.get("volume_source_path") or None,
+            volume_paths=list(d.get("volume_paths") or []),
+        )
 
 
 @dataclass
 class DbContainerConfig:
     name: str
     db_user: str = "postgres"
+
+    @staticmethod
+    def from_dict(d: dict) -> "DbContainerConfig":
+        return DbContainerConfig(name=d["name"], db_user=d.get("db_user") or "postgres")
 
 
 @dataclass
@@ -22,15 +54,33 @@ class HostConfig:
     nas_mount: str
     containers: List[ContainerConfig] = field(default_factory=list)
     db_containers: List[DbContainerConfig] = field(default_factory=list)
+    host_token: str = ""
+    fingerprint: str = ""
+    created_at: str = ""
+    expected_interval_hours: Optional[float] = None
+    monitoring_paused: bool = False
+    auto_update: bool = False
 
     def to_dict(self):
         return {
             "host_name": self.host_name,
             "host_id": self.host_id,
             "nas_mount": self.nas_mount,
-            "containers": [c.__dict__ for c in self.containers],
-            "db_containers": [d.__dict__ for d in self.db_containers],
+            "containers": [c.to_dict() for c in self.containers],
+            "db_containers": [{"name": d.name, "db_user": d.db_user} for d in self.db_containers],
+            "host_token": self.host_token,
+            "fingerprint": self.fingerprint,
+            "created_at": self.created_at,
+            "expected_interval_hours": self.expected_interval_hours,
+            "monitoring_paused": self.monitoring_paused,
+            "auto_update": self.auto_update,
         }
+
+    def public_dict(self):
+        d = self.to_dict()
+        d.pop("host_token", None)
+        d.pop("fingerprint", None)
+        return d
 
     @staticmethod
     def from_dict(data: dict) -> "HostConfig":
@@ -38,42 +88,27 @@ class HostConfig:
             host_name=data["host_name"],
             host_id=str(data["host_id"]),
             nas_mount=data.get("nas_mount", "highfishNAS25"),
-            containers=[ContainerConfig(**c) for c in data.get("containers", [])],
-            db_containers=[DbContainerConfig(**d) for d in data.get("db_containers", [])],
+            containers=[ContainerConfig.from_dict(c) for c in data.get("containers") or []],
+            db_containers=[DbContainerConfig.from_dict(d) for d in data.get("db_containers") or []],
+            host_token=data.get("host_token") or "",
+            fingerprint=data.get("fingerprint") or "",
+            created_at=data.get("created_at") or "",
+            expected_interval_hours=data.get("expected_interval_hours"),
+            monitoring_paused=bool(data.get("monitoring_paused", False)),
+            auto_update=bool(data.get("auto_update", False)),
         )
 
-
-@dataclass
-class BackupReport:
-    """Letzter Ergebnis-Report eines Backup-Laufs (Monitoring)."""
-
-    host_id: str
-    status: str                       # "ok" | "error"
-    exit_code: int = 0
-    duration_seconds: float = 0.0
-    size_bytes: int = 0
-    message: str = ""
-    reported_at: str = ""             # ISO 8601 (UTC)
-
-    def to_dict(self):
-        return {
-            "host_id": self.host_id,
-            "status": self.status,
-            "exit_code": self.exit_code,
-            "duration_seconds": self.duration_seconds,
-            "size_bytes": self.size_bytes,
-            "message": self.message,
-            "reported_at": self.reported_at,
-        }
-
-    @staticmethod
-    def from_dict(data: dict) -> "BackupReport":
-        return BackupReport(
-            host_id=str(data["host_id"]),
-            status=str(data["status"]),
-            exit_code=int(data.get("exit_code", 0)),
-            duration_seconds=float(data.get("duration_seconds", 0)),
-            size_bytes=int(data.get("size_bytes", 0)),
-            message=str(data.get("message", "")),
-            reported_at=str(data.get("reported_at", "")),
-        )
+    def validate(self) -> "HostConfig":
+        v.host_id(self.host_id)
+        v.host_name(self.host_name)
+        v.label(self.nas_mount)
+        for c in self.containers:
+            v.container_name(c.name)
+            c.volume_source_path = v.path(c.volume_source_path) if c.volume_source_path else None
+            c.volume_paths = [v.path(p) for p in c.volume_paths]
+        for d in self.db_containers:
+            v.container_name(d.name)
+            v.db_user(d.db_user)
+        if self.expected_interval_hours is not None:
+            v.number(self.expected_interval_hours, "Erwartetes Intervall (h)", 1, 24 * 31)
+        return self

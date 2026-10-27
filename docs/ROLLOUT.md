@@ -1,55 +1,52 @@
 # Rollout-Leitfaden
 
-## Vorbereitung: Basic Auth konfigurieren
+## 1. Zentrale bereitstellen
 
-Vor dem ersten Start `.env` aus `.env.example` anlegen und ein starkes
-Passwort setzen:
+`.env` aus `.env.example` anlegen (mindestens `BASIC_AUTH_PASSWORD`), externes Netzwerk sicherstellen, Images ziehen:
 
 ```bash
-cp .env.example .env
-# BASIC_AUTH_USER / BASIC_AUTH_PASSWORD in .env anpassen
-docker compose --env-file .env up -d --build
+docker network inspect highfishNetwork >/dev/null 2>&1 || docker network create highfishNetwork
+docker compose --env-file .env pull
+docker compose --env-file .env up -d
 ```
 
-Ohne gesetztes `BASIC_AUTH_PASSWORD` startet die Web-UI/API nicht nutzbar
-(fail-closed, siehe `docs/ARCHITECTURE.md`).
+Portainer: Git-Stack (`refs/heads/main`, `docker-compose.yml`), Variablen als Stack-Umgebung, danach **Pull and redeploy** mit aktivierter Image-Aktualisierung. `./app/config` muss auf dem Docker-Host bestehen bleiben (enthält `hosts.yml` und die Datenbank) – den Stack nicht löschen, ohne vorher zu sichern.
 
-## Neuen Host anbinden
+## 2. Backup-Ziel auf jedem Client prüfen
 
-1. Web-UI oeffnen: `http://192.168.178.26:8080/hosts/new` (Basic-Auth-Login
-   mit den Werten aus `.env`).
-2. Felder ausfuellen:
-   - **Hostname**: z.B. `highfish9`
-   - **Host-ID**: kurze eindeutige ID, z.B. `9`
-   - **NAS-Mount**: i.d.R. `highfishNAS25`
-   - **Container**: eine Zeile pro Container im Format
-     `containername;/pfad/zum/volume`
-   - **DB-Container**: eine Zeile pro DB-Container im Format
-     `db_containername;db_user`
-3. Speichern -> Script wird sofort generiert.
-4. Auf dem neuen Host einmalig:
+```bash
+findmnt -T /mnt/highfishNAS25/Sicherung   # muss das NAS zeigen, nicht "/"
+```
 
-   ```bash
-   curl -fsSL -u "admin:<PASSWORT>" \
-     http://192.168.178.26:8080/bootstrap/9 -o bootstrap.sh
-   chmod +x bootstrap.sh
-   sudo ./bootstrap.sh
-   ```
+Das Backup bricht absichtlich ab, wenn der Pfad auf dem lokalen Root-Dateisystem liegt. Ein NAS-Mount wird von keinem Script eingerichtet.
 
-5. Der Host fuehrt beim Bootstrap direkt einen Testlauf aus und richtet
-   anschliessend den taeglichen Cronjob (Standard: 03:00 Uhr) ein.
+## 3. Neuen Host anbinden
 
-## Bestehenden Host aendern (z.B. neuer Container)
+**Variante A – Enroll (empfohlen):** `ENROLL_TOKEN` setzen, dann auf dem Host
 
-1. In der Web-UI: `Hosts -> Bearbeiten`, Container-Liste ergaenzen, speichern.
-2. Das Script auf dem Host aktualisiert sich **nicht automatisch** -- entweder:
-   - erneut `curl -u "admin:<PASSWORT>" http://192.168.178.26:8080/script/<HOST_ID>
-     -o /opt/backup/full_backup_<HOST_ID>.sh` ausfuehren, oder
-   - ueber das MCP-Tool `regenerate_backup_script` per Agent anstossen
-     (siehe `mcp_server/README.md`).
+```bash
+curl -fsS http://192.168.178.26:8080/enroll.sh -o enroll.sh && less enroll.sh
+sudo ./enroll.sh --dry-run
+sudo ./enroll.sh
+```
 
-## Host entfernen
+**Variante B – manuell:** Host in der Web-UI anlegen, dann `sudo bash bootstrap.sh --run-now` (Download siehe Host-Detailseite).
 
-Aktuell ueber direktes Bearbeiten von `app/config/hosts.yml` (Eintrag
-loeschen) plus Neustart des Containers. Ein Loesch-Button in der Web-UI ist als
-Erweiterung vorgesehen (Issue anlegen).
+Beide installieren `/opt/backup/full_backup_<ID>.sh` und `/etc/cron.d/hai-backup-<ID>` (idempotent) und verwenden ein Host-Token.
+
+## 4. Verifizieren
+
+1. Ersten Lauf manuell starten, `/var/log/backup_<ID>.log` und das Dashboard prüfen.
+2. Zieldateien auf dem NAS kontrollieren (Image-Archive, `*_data`, `paths_map.txt`, DB-Dumps).
+3. **Restore-Test** in einer getrennten Umgebung durchführen ([Anleitung](https://github.com/jbkunama1/hAI.FullBackupScript/blob/main/docs/RESTORE.md)).
+
+## 5. Änderungen und Entfernen
+
+- Konfiguration ändern: Web-UI → Bearbeiten. Clients übernehmen das Script nach erneutem Download oder bei aktiviertem Auto-Update.
+- Host entfernen: Web-UI → Host-Detail → „Aus der Konfiguration entfernen“. Das löscht weder Backups noch den Client-Cronjob (`/etc/cron.d/hai-backup-<ID>` manuell entfernen).
+
+## 6. Migration und Rückfall
+
+- Beim ersten Start vergibt der Server für bestehende Hosts Tokens und importiert `reports.json` (Original bleibt).
+- Rückfall: vorherige Image-Tags (`sha-<Commit>`) in der Compose-Datei eintragen. Unveränderte Alt-Hosts bleiben im alten Format. Wurde ein Host aber per Web-UI oder Enroll gespeichert, enthält er das Feld `volume_paths`, das ältere Versionen nicht lesen können – dann die gesicherte `hosts.yml` zurückspielen.
+- Vor größeren Updates `app/config/` sichern.

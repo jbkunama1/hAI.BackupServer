@@ -1,49 +1,45 @@
 #!/bin/bash
 ###############################################################################
-# hAI.BackupServer Bootstrap-Script
-# Host: {{ host_name }} (Host-ID {{ host_id }})
-#
-# Einmalig auf dem Ziel-Server ausfuehren (als root oder mit sudo):
-#   curl -fsSL -u "{{ basic_auth_user }}:<PASSWORT>" \
-#     http://{{ orchestrator_host }}:8080/bootstrap/{{ host_id }} -o bootstrap.sh
-#   chmod +x bootstrap.sh
-#   sudo ./bootstrap.sh
-#
-# HINWEIS: Dieses generierte Script enthaelt das aktuell konfigurierte
-# Basic-Auth-Passwort im Klartext (fuer den automatischen curl-Aufruf noetig).
-# Nur ueber vertrauenswuerdige Kanaele im LAN abrufen/aufbewahren.
+# hAI.BackupServer - Bootstrap fuer Host {{ host_name|comment }} (ID {{ host_id|comment }})
+# Einmalig als root ausfuehren. Optional: --run-now startet direkt einen Backup-Lauf.
+# Enthaelt ein host-spezifisches Token (kein Admin-Passwort): Datei nach Gebrauch loeschen.
 ###############################################################################
-
 set -euo pipefail
 
-ORCHESTRATOR="{{ orchestrator_host }}:8080"
-HOST_ID="{{ host_id }}"
-TARGET_DIR="/opt/backup"
+ORCH_URL={{ orchestrator_url|shq }}
+HOST_ID={{ host_id|shq }}
+HOST_TOKEN={{ host_token|shq }}
+CRON_SCHEDULE={{ cron_schedule|shq }}
+TARGET_DIR="${HAI_TARGET_DIR:-/opt/backup}"
+CRON_DIR="${HAI_CRON_DIR:-/etc/cron.d}"
 SCRIPT_NAME="full_backup_${HOST_ID}.sh"
-CRON_SCHEDULE="{{ cron_schedule }}"
-AUTH_USER="{{ basic_auth_user }}"
-AUTH_PASSWORD="{{ basic_auth_password }}"
+CRON_FILE="${CRON_DIR}/hai-backup-${HOST_ID}"
 
-mkdir -p "${TARGET_DIR}"
+die() { echo "[hAI.BackupServer] $*" >&2; exit 1; }
+[ "${HAI_SKIP_ROOT_CHECK:-0}" = "1" ] || [ "$(id -u)" -eq 0 ] || die "Bitte als root ausfuehren."
+RUN_NOW=false
+[ "${1:-}" = "--run-now" ] && RUN_NOW=true
 
-echo "[hAI.BackupServer] Hole aktuelles Backup-Script fuer Host-ID ${HOST_ID} ..."
-curl -fsSL -u "${AUTH_USER}:${AUTH_PASSWORD}" \
-  "http://${ORCHESTRATOR}/script/${HOST_ID}" -o "${TARGET_DIR}/${SCRIPT_NAME}"
-
-chmod +x "${TARGET_DIR}/${SCRIPT_NAME}"
+install -d -m 700 "$TARGET_DIR"
+HDR="$(mktemp)"; TMP="$(mktemp)"
+trap 'rm -f "$HDR" "$TMP"' EXIT
+printf 'X-Host-Token: %s\n' "$HOST_TOKEN" > "$HDR"
+echo "[hAI.BackupServer] Lade Backup-Script fuer Host-ID ${HOST_ID} ..."
+curl -fsS -m 30 -H "@${HDR}" "${ORCH_URL}/script/${HOST_ID}" -o "$TMP" || die "Download fehlgeschlagen."
+bash -n "$TMP" || die "Heruntergeladenes Script hat Syntaxfehler - Abbruch."
+install -m 700 "$TMP" "${TARGET_DIR}/${SCRIPT_NAME}"
 
 echo "[hAI.BackupServer] Richte Cronjob ein (${CRON_SCHEDULE}) ..."
-CRON_LINE="${CRON_SCHEDULE} root ${TARGET_DIR}/${SCRIPT_NAME} >> /var/log/backup_${HOST_ID}.log 2>&1"
-
-if [ -f /etc/crontab ] && grep -q "${SCRIPT_NAME}" /etc/crontab 2>/dev/null; then
-  sed -i "/${SCRIPT_NAME//\//\\/}/d" /etc/crontab
+install -d "$CRON_DIR"
+printf '%s root %s/%s >> /var/log/backup_%s.log 2>&1\n' "$CRON_SCHEDULE" "$TARGET_DIR" "$SCRIPT_NAME" "$HOST_ID" > "$CRON_FILE"
+chmod 644 "$CRON_FILE"
+# Altlast aus fruehen Versionen (Eintrag in /etc/crontab) entfernen, um Doppelstarts zu vermeiden
+if [ -f /etc/crontab ] && grep -qF "$SCRIPT_NAME" /etc/crontab 2>/dev/null; then
+  sed -i "\|${SCRIPT_NAME}|d" /etc/crontab
 fi
-echo "${CRON_LINE}" >> /etc/crontab
 
-echo "[hAI.BackupServer] Testlauf (einmalig, kann etwas dauern) ..."
-"${TARGET_DIR}/${SCRIPT_NAME}" || {
-  echo "[hAI.BackupServer] Testlauf fehlgeschlagen - bitte /var/log/backup_${HOST_ID}.log pruefen."
-  exit 1
-}
-
-echo "[hAI.BackupServer] Fertig. ${HOST_ID} sichert ab sofort automatisch (${CRON_SCHEDULE})."
+if [ "$RUN_NOW" = "true" ]; then
+  echo "[hAI.BackupServer] Starte Backup-Lauf ..."
+  "${TARGET_DIR}/${SCRIPT_NAME}" || die "Backup-Lauf fehlgeschlagen - Log: /var/log/backup_${HOST_ID}.log"
+fi
+echo "[hAI.BackupServer] Fertig. Zeitplan: ${CRON_SCHEDULE}. Erster Lauf: --run-now oder manuell ${TARGET_DIR}/${SCRIPT_NAME}"

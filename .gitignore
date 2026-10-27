@@ -1,7 +1,12 @@
 __pycache__/
 *.pyc
+.pytest_cache/
 app/config/hosts.yml
 app/config/reports.json
+app/config/*.db
+app/config/*.db-wal
+app/config/*.db-shm
+app/config/*.tmp
 app/generated/
 .env
 .DS_Store

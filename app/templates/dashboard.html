@@ -1,70 +1,28 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8">
-  <title>hAI.BackupServer - Uebersicht</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-<header>
-  <h1>🗄️ hAI.BackupServer</h1>
-  <a class="btn" href="/hosts/new">+ Neuer Host</a>
-</header>
-<main>
-  <div class="card">
-    <p class="muted">
-      NAS-Ziel: <strong>{{ nas_mount_default }}</strong> &middot;
-      Basis-Pfad: <code>{{ nas_base_path }}</code> &middot;
-      Orchestrator: <strong>{{ orchestrator_host }}:8080</strong>
-    </p>
-  </div>
-
-  <table>
-    <thead>
-      <tr>
-        <th>Host</th>
-        <th>Host-ID</th>
-        <th>Container</th>
-        <th>DB-Dumps</th>
-        <th>Letzter Lauf</th>
-        <th>Aktionen</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for h in hosts %}
-      {% set r = reports.get(h.host_id) %}
-      <tr>
-        <td>{{ h.host_name }}</td>
-        <td><span class="pill">{{ h.host_id }}</span></td>
-        <td>{{ h.containers|length }}</td>
-        <td>{{ h.db_containers|length }}</td>
-        <td>
-          {% if r %}
-            {% if r.status == 'ok' %}
-              <span class="pill ok">OK</span>
-            {% else %}
-              <span class="pill err">FEHLER</span>
-            {% endif %}
-            <div class="muted">
-              {{ r.reported_at[:16].replace('T', ' ') }} &middot;
-              {{ '%.0f' | format(r.duration_seconds) }} s &middot;
-              {{ '%.1f' | format(r.size_bytes / 1073741824) }} GB
-            </div>
-          {% else %}
-            <span class="muted">noch nie gelaufen</span>
-          {% endif %}
-        </td>
-        <td class="row">
-          <a class="btn secondary" href="/hosts/{{ h.host_id }}">Details</a>
-          <a class="btn secondary" href="/hosts/{{ h.host_id }}/edit">Bearbeiten</a>
-          <a class="btn" href="/script/{{ h.host_id }}" target="_blank">Script</a>
-        </td>
-      </tr>
-      {% else %}
-      <tr><td colspan="6" class="muted">Noch keine Hosts konfiguriert. Lege den ersten Host an.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</main>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}Dashboard · hAI.BackupServer{% endblock %}
+{% block content %}
+<div class="stats">
+  {% for key, label in [('ok','OK'),('warning','Warnung'),('error','Fehler'),('overdue','Überfällig'),('no_report','Keine Meldung'),('paused','Pausiert')] %}
+  <div class="card stat"><strong>{{ counts.get(key, 0) }}</strong><span class="muted">{{ label }}</span></div>
+  {% endfor %}
+</div>
+<div class="card"><p class="muted">Backup-Ziel: <code class="inline">{{ nas_base_path }}</code> · Orchestrator: <strong>{{ orchestrator_host }}:8080</strong></p></div>
+<div class="tablewrap"><table>
+  <thead><tr><th>Host</th><th>ID</th><th>Container</th><th>Status</th><th>Letzte Meldung</th><th>Aktionen</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr>
+    <td>{{ r.host.host_name }}</td>
+    <td><span class="pill">{{ r.host.host_id }}</span></td>
+    <td>{{ r.host.containers|length }} + {{ r.host.db_containers|length }} DB</td>
+    <td><span class="pill {{ r.pill }}">{{ r.label }}</span>{% if r.overdue and r.state not in ('overdue','unknown') %} <span class="pill err">ÜBERFÄLLIG</span>{% endif %}
+      {% if r.detail %}<div class="muted">{{ r.detail }}</div>{% endif %}</td>
+    <td>{% if r.last %}{{ r.last.first_seen_at|fmt_ts }}<div class="muted">{{ r.last.duration_seconds|fmt_dur }} · {{ r.last.size_bytes|human_size }}</div>{% else %}<span class="muted">–</span>{% endif %}</td>
+    <td class="row"><a class="btn secondary" href="/hosts/{{ r.host.host_id }}">Details</a><a class="btn secondary" href="/hosts/{{ r.host.host_id }}/edit">Bearbeiten</a></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">Noch keine Hosts. Lege einen an oder nutze das <a href="/enroll">Enroll-Script</a>.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endblock %}

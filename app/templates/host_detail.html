@@ -1,48 +1,33 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8">
-  <title>hAI.BackupServer - {{ host.host_name }}</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-<header>
-  <h1>🗄️ hAI.BackupServer</h1>
-  <a class="btn secondary" href="/">← Zurueck</a>
-</header>
-<main>
-  <div class="card">
-    <h2>{{ host.host_name }} <span class="pill">Host-ID {{ host.host_id }}</span></h2>
-    <p class="muted">NAS-Mount: <code>{{ host.nas_mount }}</code></p>
-
-    <h3>Container</h3>
-    <ul>
-      {% for c in host.containers %}
-      <li>{{ c.name }} &mdash; <span class="muted">{{ c.volume_source_path or "kein Volume" }}</span></li>
-      {% endfor %}
-    </ul>
-
-    <h3>DB-Container</h3>
-    <ul>
-      {% for db in host.db_containers %}
-      <li>{{ db.name }} (User: {{ db.db_user }})</li>
-      {% else %}
-      <li class="muted">keine</li>
-      {% endfor %}
-    </ul>
-
-    <div class="row" style="margin-top:1.5rem;">
-      <a class="btn" href="/script/{{ host.host_id }}" target="_blank">Backup-Script anzeigen</a>
-      <a class="btn secondary" href="/bootstrap/{{ host.host_id }}" target="_blank">Bootstrap-Script anzeigen</a>
-      <a class="btn secondary" href="/hosts/{{ host.host_id }}/edit">Bearbeiten</a>
-    </div>
-
-    <h3 style="margin-top:2rem;">Einmaliger Rollout-Befehl</h3>
-    <p class="muted">Basic-Auth-Benutzer: <strong>{{ basic_auth_user }}</strong> (Passwort separat einsetzen, wird hier nicht angezeigt).</p>
-    <pre>curl -fsSL -u "{{ basic_auth_user }}:&lt;PASSWORT&gt;" http://{{ orchestrator_host }}:8080/bootstrap/{{ host.host_id }} -o bootstrap.sh
-chmod +x bootstrap.sh
-sudo ./bootstrap.sh</pre>
+{% extends "base.html" %}
+{% block title %}{{ host.host_name }} · hAI.BackupServer{% endblock %}
+{% block content %}
+<h2>🖥️ {{ host.host_name }} <span class="pill">{{ host.host_id }}</span> <span class="pill {{ info.pill }}">{{ info.label }}</span></h2>
+{% if info.detail %}<p class="muted">{{ info.detail }}</p>{% endif %}
+<div class="card">
+  <p>Container: {% for c in host.containers %}<code class="inline">{{ c.name }}</code>{% if c.all_paths() %} ({{ c.all_paths()|join(', ') }}){% endif %}; {% else %}<span class="muted">keine</span>{% endfor %}</p>
+  <p>DB: {% for d in host.db_containers %}<code class="inline">{{ d.name }}</code> ({{ d.db_user }}); {% else %}<span class="muted">keine</span>{% endfor %}</p>
+  <p>Letzter erfolgreicher Lauf: {{ info.last_success_at|fmt_ts }} · Erwartet alle {{ info.interval_hours|round(1) }} h</p>
+  <div class="row">
+    <a class="btn secondary" href="/hosts/{{ host.host_id }}/edit">Bearbeiten</a>
+    <a class="btn" href="/script/{{ host.host_id }}" target="_blank" rel="noopener">Script anzeigen</a>
+    <form method="post" action="/hosts/{{ host.host_id }}/pause"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="paused" value="{{ '0' if host.monitoring_paused else '1' }}">
+      <button class="btn secondary" type="submit">{{ 'Monitoring fortsetzen' if host.monitoring_paused else 'Monitoring pausieren' }}</button></form>
   </div>
-</main>
-</body>
-</html>
+</div>
+<div class="card"><h3>Installation (Variante B)</h3>
+<pre>curl -fsS -u {{ basic_auth_user }} http://{{ orchestrator_host }}:8080/bootstrap/{{ host.host_id }} -o bootstrap.sh
+less bootstrap.sh
+sudo bash bootstrap.sh --run-now</pre>
+<p class="muted">Das Passwort wird interaktiv abgefragt. Das Bootstrap-Script enthält nur das host-spezifische Token.</p></div>
+<h3>Letzte Läufe</h3>
+<div class="tablewrap"><table><thead><tr><th>Zeit</th><th>Status</th><th>Dauer</th><th>Größe</th><th>Meldung</th></tr></thead><tbody>
+{% for r in runs %}<tr><td>{{ r.first_seen_at|fmt_ts }}</td><td><span class="pill {{ {'ok':'ok','warning':'warn','error':'err','running':'info'}.get(r.status,'muted') }}">{{ r.status|upper }}</span></td>
+<td>{{ r.duration_seconds|fmt_dur }}</td><td>{{ r.size_bytes|human_size }}</td><td class="wrap">{{ r.message }}</td></tr>
+{% else %}<tr><td colspan="5" class="muted">Noch keine Meldung.</td></tr>{% endfor %}</tbody></table></div>
+<div class="card danger-zone"><h3>Host aus der Konfiguration entfernen</h3>
+<p class="muted">Entfernt nur den Eintrag und macht das Host-Token ungültig. Gesicherte Daten auf dem NAS und der Cronjob auf dem Client bleiben bestehen und müssen dort manuell entfernt werden (<code class="inline">/etc/cron.d/hai-backup-{{ host.host_id }}</code>).</p>
+<form method="post" action="/hosts/{{ host.host_id }}/delete"><input type="hidden" name="csrf" value="{{ csrf }}">
+<label>Zur Bestätigung die Host-ID <strong>{{ host.host_id }}</strong> eingeben<input name="confirm" autocomplete="off" required></label>
+<button class="btn danger" type="submit">Endgültig entfernen</button></form></div>
+{% endblock %}

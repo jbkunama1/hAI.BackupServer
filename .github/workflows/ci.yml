@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Abhaengigkeiten installieren
+        run: pip install -r requirements.txt -r telegram_bot/requirements.txt pytest httpx
+      - name: Tests (Logik, Scripte, Bot, API)
+        run: python -m pytest -q
+      - name: Compose-Dateien validieren
+        run: |
+          cp .env.example .env
+          docker compose --env-file .env config -q
+          docker compose --env-file .env --profile telegram config -q
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {context: ., dockerfile: Dockerfile}
+          - {context: ./mcp_server, dockerfile: mcp_server/Dockerfile}
+          - {context: ./telegram_bot, dockerfile: telegram_bot/Dockerfile}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Image bauen (ohne Veroeffentlichung)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: false

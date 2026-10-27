@@ -5,212 +5,173 @@
 [![GHCR Build](https://github.com/jbkunama1/hAI.BackupServer/actions/workflows/ghcr.yml/badge.svg)](https://github.com/jbkunama1/hAI.BackupServer/actions/workflows/ghcr.yml)
 [![Docker](https://img.shields.io/badge/Docker-GHCR-2496ED?style=flat-square&logo=docker&logoColor=white)](docker-compose.yml)
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](app/main.py)
+[![Telegram](https://img.shields.io/badge/Bot-Telegram-26A5E4?style=flat-square&logo=telegram&logoColor=white)](docs/TELEGRAM.md)
 [![MCP](https://img.shields.io/badge/MCP-SSE-8b5cf6?style=flat-square)](mcp_server/README.md)
 [![License](https://img.shields.io/badge/License-MIT-facc15?style=flat-square)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/jbkunama1/hAI.BackupServer?style=flat-square&logo=github)](https://github.com/jbkunama1/hAI.BackupServer/stargazers)
 [![Issues](https://img.shields.io/github/issues/jbkunama1/hAI.BackupServer?style=flat-square)](https://github.com/jbkunama1/hAI.BackupServer/issues)
 
-> Zentrales Backup-Control-Center für Docker- und Linux-Hosts: Web-Dashboard, automatisch generierte Bash-Scripte, REST-API, MCP-Anbindung und Backup-Reports.
+> Zentrales Backup-Control-Center für Docker- und Linux-Hosts: Web-Adminmenü, automatisch generierte Backup-Scripte, universelles Enroll-Script, Monitoring mit Historie, Telegram-Admin-Bot, REST-API und MCP.
 
-`self-hosted` · `docker` · `backup` · `fastapi` · `bash` · `rsync` · `monitoring` · `mcp` · `portainer` · `ghcr`
+`self-hosted` · `docker` · `backup` · `fastapi` · `bash` · `rsync` · `monitoring` · `telegram-bot` · `mcp` · `portainer` · `ghcr`
 
 ---
-
-## 🧭 Navigation
-
-[Features](#-features) · [Architektur](#-architektur) · [Quickstart](#-quickstart-mit-ghcr) · [Portainer](#-portainer-deployment) · [Hosts](#-hosts-anbinden) · [Monitoring](#-monitoring) · [Sicherheit](#-sicherheit--grenzen) · [Roadmap](#-roadmap)
 
 ## ✨ Features
 
 | Bereich | Funktion |
 |---|---|
-| 🖥️ Web-UI | Hosts anlegen, bearbeiten und Backup-Scripte herunterladen |
-| 🧩 Script-Generator | Individuelle Bash-Scripte aus Jinja2-Templates |
-| 📦 Container-Backup | Docker-Images, konfigurierte Volume-/Bind-Pfade, optionale PostgreSQL-Dumps und Crontab |
-| 🚀 Bootstrap | Hostbezogenes Installationsscript mit Cron-Einrichtung |
-| 📊 Monitoring | Letzter Report pro Host: OK/Fehler, Empfangszeit, Dauer und Datenmenge |
-| 🤖 MCP | Sieben Tools über einen separaten SSE-Service |
-| 📂 Filebrowser | Separater Container zum Durchsehen des Backup-Ziels |
-| 🐳 GHCR | Workflow für Orchestrator und MCP auf AMD64 und ARM64 |
+| 🖥️ Adminmenü | Dashboard, Monitoring-Historie, Host-Verwaltung, Einrichtungs-Anleitung, Einstellungen, Audit-Log |
+| 🚀 Enrollment | `enroll.sh`: erkennt Container und Datenpfade, registriert den Host, richtet Script + Cron ein |
+| 🧩 Bootstrap | Host manuell anlegen und individuelles Installationsscript laden – parallel zu Enroll nutzbar |
+| 📦 Backup | Container-Images, mehrere Datenpfade je Container, PostgreSQL-Dumps, Crontab |
+| 🛡️ Schutz | Abbruch ohne NAS-Mount, Lock gegen Überlappung, Warnung statt falschem „OK“ |
+| 📊 Monitoring | Läufe mit Historie, Zustände (OK, Warnung, Fehler, überfällig, unklar, pausiert) |
+| 🤖 Telegram | Fehler sofort, Erfolge als Tagesdigest, Adminmenü mit Bestätigungen |
+| 🔌 MCP / API | Sieben MCP-Tools und REST-API für Agenten |
+| 📂 Filebrowser | Backup-Ziel im Browser durchsuchen |
 
-Baut auf [hAI.FullBackupScript](https://github.com/jbkunama1/hAI.FullBackupScript) auf. Die Sicherung läuft auf dem jeweiligen Host; der Orchestrator verwaltet Konfiguration, Scripte und Reports.
+Baut auf [hAI.FullBackupScript](https://github.com/jbkunama1/hAI.FullBackupScript) auf. Die Sicherung läuft **auf dem jeweiligen Host**, der Orchestrator verwaltet Konfiguration, Scripte und Reports.
 
 ## 🌐 Architektur
 
 ```mermaid
 flowchart LR
     Admin["🧑‍💻 Browser / Admin"] --> API["🗄️ Orchestrator · 8080"]
-    Agent["🤖 KI / MCP-Gateway"] --> MCP["🔌 MCP SSE · 8090"]
+    TG["📱 Telegram"] <--> Bot["🤖 Bot (optional)"]
+    Bot --> API
+    Agent["🧠 KI / MCP-Gateway"] --> MCP["🔌 MCP SSE · 8090"]
     MCP --> API
-    API --> Config["⚙️ hosts.yml + reports.json"]
-    Host["🖥️ Docker-/Linux-Host"] -->|Bootstrap / Script abrufen| API
-    Host -->|HTTP-Ergebnisreport| API
+    API --> Data["⚙️ hosts.yml + SQLite"]
+    Host["🖥️ Docker-/Linux-Host"] -->|enroll.sh / bootstrap| API
+    Host -->|Läufe melden · Host-Token| API
     Host -->|Backup-Daten| NAS["💾 NAS / Backup-Ziel"]
-    Browser["📂 Filebrowser · 4455"] --> NAS
+    FB["📂 Filebrowser · 4455"] --> NAS
     classDef control fill:#0f766e,stroke:#5eead4,color:#fff
     classDef client fill:#1d4ed8,stroke:#93c5fd,color:#fff
     classDef storage fill:#7c3aed,stroke:#c4b5fd,color:#fff
-    class API,MCP control
-    class Admin,Agent,Host,Browser client
-    class Config,NAS storage
+    class API,MCP,Bot control
+    class Admin,Agent,Host,FB,TG client
+    class Data,NAS storage
 ```
 
-Die Compose-Services nutzen das externe Docker-Netzwerk `highfishNetwork`. Der Netzwerkname stellt keinen NAS-Mount auf den Clients her.
+Drei getrennte Berechtigungen: **Admin** (Basic Auth), **Host** (eigenes Token, nur eigenes Script und eigene Reports) und **Enrollment** (Token, nur Registrierung). Clients erhalten nie das Admin-Passwort.
 
-## 🚀 Quickstart mit GHCR
-
-Voraussetzungen: Docker mit Compose, erreichbare GHCR-Images und ein auf jedem Backup-Host passend eingerichtetes Backup-Ziel.
+## 🚀 Quickstart (GHCR)
 
 ```bash
 git clone https://github.com/jbkunama1/hAI.BackupServer.git
 cd hAI.BackupServer
-cp .env.example .env
-# .env bearbeiten: BASIC_AUTH_PASSWORD setzen!
-cp app/config/hosts.yml.example app/config/hosts.yml
+cp .env.example .env        # mindestens BASIC_AUTH_PASSWORD setzen
+cp app/config/hosts.yml.example app/config/hosts.yml   # optional, wird sonst automatisch angelegt
 
-# Nur anlegen, falls noch nicht vorhanden:
 docker network inspect highfishNetwork >/dev/null 2>&1 || docker network create highfishNetwork
-
 docker compose --env-file .env pull
 docker compose --env-file .env up -d
 ```
 
-Die Compose-Datei verwendet vorgebaute Images, keinen lokalen Build:
-
-| Service | Image |
+| Dienst | Adresse (Beispiel) |
 |---|---|
-| Orchestrator | `ghcr.io/jbkunama1/hai.backupserver-orchestrator:latest` |
-| MCP | `ghcr.io/jbkunama1/hai.backupserver-mcp:latest` |
-| Filebrowser | `filebrowser/filebrowser:latest` |
-
-Der [GHCR-Workflow](.github/workflows/ghcr.yml) baut bei Push auf `main` oder manuellem Start für `linux/amd64` und `linux/arm64`. Tags: `latest` auf dem Default-Branch und `sha-<Kurz-SHA>`. Vor einem Deployment den erfolgreichen Workflow-Lauf prüfen. Private GHCR-Pakete benötigen Registry-Zugangsdaten; für anonymes Pulling muss die Paketsichtbarkeit public sein.
-
-### 🔗 Zugänge (Beispielhost)
-
-| Dienst | Adresse |
-|---|---|
-| Web-UI | `http://192.168.178.26:8080` |
-| REST-API-Dokumentation | `http://192.168.178.26:8080/docs` |
-| MCP SSE | `http://192.168.178.26:8090/sse` |
+| Web-UI / Adminmenü | `http://192.168.178.26:8080` |
+| API-Dokumentation | `http://192.168.178.26:8080/docs` |
+| MCP (SSE) | `http://192.168.178.26:8090/sse` |
 | Filebrowser | `http://192.168.178.26:4455` |
 
-## 🐳 Portainer-Deployment
+Images: `ghcr.io/jbkunama1/hai.backupserver-{orchestrator,mcp,telegram}:latest` (AMD64 + ARM64). Der [Publish-Workflow](.github/workflows/ghcr.yml) veröffentlicht nur, wenn alle Tests bestehen. Private GHCR-Pakete brauchen Registry-Zugang; für anonymes Pullen muss das Paket public sein.
 
-1. `highfishNetwork` auf dem Ziel-Docker-Host bereitstellen.
-2. In Portainer: Stacks → Add stack → Repository.
-3. Repository: `https://github.com/jbkunama1/hAI.BackupServer`.
-4. Reference: `refs/heads/main`; Compose path: `docker-compose.yml`.
-5. `BASIC_AUTH_PASSWORD` und die benötigten Variablen setzen.
-6. NAS-Pfad und Bind-Mounts für die konkrete Portainer-Umgebung prüfen.
-7. Stack deployen; bei Updates aktuelle Images explizit neu pullen.
+## 🐳 Portainer
 
-> ⚠️ Öffentliches Git-Repository und öffentliche GHCR-Pakete sind unterschiedliche Einstellungen. Zugriff auf das Repo garantiert keinen anonymen Image-Pull.
+1. `highfishNetwork` auf dem Docker-Host sicherstellen.
+2. Stacks → Add stack → Repository: `https://github.com/jbkunama1/hAI.BackupServer`, `refs/heads/main`, `docker-compose.yml`.
+3. Umgebungsvariablen aus [`.env.example`](.env.example) eintragen (Pflicht: `BASIC_AUTH_PASSWORD`).
+4. Deploy; bei Updates **Pull and redeploy** mit Image-Aktualisierung.
 
-### 💾 Persistente Daten und Mounts
+`./app/config` (enthält `hosts.yml` und `backupserver.db`) muss erhalten bleiben – Stack nicht löschen, ohne vorher zu sichern. Die Templates stammen aus dem Image; es gibt keinen Template-Bind-Mount mehr.
 
-| Quelle / Volume | Ziel | Inhalt |
-|---|---|---|
-| `./app/config` | `/app/config` | `hosts.yml`, `reports.json` |
-| `./app/templates` | `/app/templates` | Script- und HTML-Templates |
-| `generated_scripts` | `/app/generated` | Generierte Backup-Scripte |
-| `/mnt/highfishNAS25/Sicherung` | `/srv` im Filebrowser | Backup-Dateien |
-| `filebrowser_config` / `filebrowser_db` | `/config` / `/database` | Filebrowser-Konfiguration |
+## 🖥️ Hosts anbinden
 
-Relative Bind-Mounts hängen vom tatsächlichen Deployment-Verzeichnis ab. Konfigurationsdaten separat sichern, bevor du einen Stack entfernst oder neu anlegst. `.gitignore` verhindert Git-Tracking, ersetzt aber keine Persistenz- oder Backup-Garantie. Der Template-Bind-Mount überlagert die Templates im Image: Repo-Stand und Image-Version gemeinsam aktualisieren.
+**Voraussetzung auf jedem Client:** Docker, rsync, curl, findmnt und das NAS **bereits gemountet** unter `/mnt/highfishNAS25/Sicherung` – kein Script richtet einen Mount ein. Prüfen: `findmnt -T /mnt/highfishNAS25/Sicherung` muss das NAS zeigen, nicht `/`.
+
+**A) Enroll (empfohlen)** – `ENROLL_TOKEN` am Server setzen, dann auf dem Host:
+
+```bash
+curl -fsS http://192.168.178.26:8080/enroll.sh -o enroll.sh && less enroll.sh
+sudo ./enroll.sh --dry-run     # zeigt nur, was erkannt wird
+sudo ./enroll.sh               # fragt Token und Container ab
+```
+
+**B) Manuell** – Host im Adminmenü anlegen, dann auf dem Host:
+
+```bash
+curl -fsS -u admin http://192.168.178.26:8080/bootstrap/HOST_ID -o bootstrap.sh
+less bootstrap.sh && sudo bash bootstrap.sh --run-now
+```
+
+Beide legen `/etc/cron.d/hai-backup-<ID>` an (idempotent) und nutzen ein Host-Token. Details: [Enrollment](docs/ENROLLMENT.md) · [Rollout](docs/ROLLOUT.md).
+
+## 📊 Monitoring
+
+Jeder Lauf meldet Start und Ergebnis per HTTP (nicht über das NAS). Zustellprobleme werden lokal gespoolt und nachgereicht; Doppelmeldungen sind unschädlich.
+
+| Zustand | Bedeutung |
+|---|---|
+| ✅ OK · ⚠️ Warnung · 🔴 Fehler | Ergebnis des letzten Laufs (fehlender Container = Warnung, nie „OK“) |
+| ⏳ Läuft · ❓ Unklar | Aktiv bzw. gestartet, aber nie abgeschlossen |
+| 🕑 Überfällig | Letzter Lauf älter als Intervall + Karenz |
+| ❔ Keine Meldung | Neuer Host in der Einrichtungsfrist – nicht „nie gelaufen“ |
+| ⏸️ Pausiert | Wartungsmodus |
+
+Details und Grenzen: [Monitoring](docs/MONITORING.md).
+
+## 🤖 Telegram-Bot (optional)
+
+`TELEGRAM_BOT_TOKEN` (von @BotFather) und `TELEGRAM_ALLOWED_USER_IDS` setzen, `COMPOSE_PROFILES=telegram` aktivieren, dem Bot im Privatchat `/admin` senden. Default-Deny für Befehle und Buttons; mutierende Aktionen mit Bestätigung und Audit-Log. **Fehler sofort, Erfolge gebündelt als Tagesdigest** (08:00 Europe/Berlin) inklusive Hosts ohne Meldung. Token niemals in Chats oder Commits teilen. Siehe [Telegram](docs/TELEGRAM.md).
 
 ## 🔧 Konfiguration
 
 | Variable | Default | Zweck |
 |---|---|---|
-| `BASIC_AUTH_USER` | `admin` | Admin-Benutzer |
-| `BASIC_AUTH_PASSWORD` | Pflicht | Passwort für UI und API |
+| `BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD` | `admin` / **Pflicht** | Admin-Zugang (Web-UI, API) |
 | `ORCHESTRATOR_HOST` | `192.168.178.26` | Adresse in generierten Scripten |
-| `CRON_SCHEDULE` | `0 3 * * *` | Cron-Zeitplan auf dem Client |
-| `GENERATED_DIR` | `/app/generated` | Script-Verzeichnis im Orchestrator |
-| `BACKUP_API_BASE_URL` | `http://backup-orchestrator:8080` | API-Ziel für MCP |
-| `BACKUP_API_USER` | `admin` | MCP-API-Benutzer |
-| `BACKUP_API_PASSWORD` | Pflicht | Muss zum Admin-Passwort passen |
-| `BACKUP_API_TIMEOUT` | `15` | MCP-API-Timeout in Sekunden |
-| `TZ` | `Europe/Berlin` | Container-Zeitzone |
+| `CRON_SCHEDULE` | `0 3 * * *` | Zeitplan auf den Clients |
+| `ENROLL_TOKEN` | leer = aus | Token für `enroll.sh` |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_ALLOWED_USER_IDS` | leer = Bot inaktiv | Bot-Zugang |
+| `DIGEST_TIME` / `DIGEST_TZ` | `08:00` / `Europe/Berlin` | Tagesdigest |
+| `DB_PATH`, `CONFIG_DIR`, `GENERATED_DIR` | unter `/app/config` bzw. `/app/generated` | Speicherorte |
 
-Die Compose-Datei leitet die Admin-Zugangsdaten an den MCP-Service weiter. Nicht jede Variable ist dort explizit aufgeführt; zusätzliche Overrides bei Bedarf im jeweiligen Service ergänzen. Der Cronjob läuft in der Zeitzone des Client-Hosts.
-
-## 🖥️ Hosts anbinden
-
-1. In `/hosts/new` Hostname, eindeutige Host-ID, NAS-Angabe, Container und Datenpfade konfigurieren.
-2. Auf dem Client das individuelle Bootstrap-Script laden und vor Ausführung prüfen:
-
-```bash
-# HOST_ID durch die konfigurierte Host-ID ersetzen.
-# curl fragt das Passwort ab; nicht in der Shell-History hinterlegen.
-curl -fsSL -u admin \
-  http://192.168.178.26:8080/bootstrap/HOST_ID -o bootstrap.sh
-less bootstrap.sh
-chmod 700 bootstrap.sh
-sudo ./bootstrap.sh
-```
-
-3. Generiertes Backup-Script manuell testen und einen Restore-Test durchführen, bevor der Cron-Betrieb als verifiziert gilt.
-
-> ⚠️ Das bisherige Bootstrap benötigt einen vorher angelegten Host. Das generische `enroll.sh` mit Auto-Registrierung ist noch geplant.
-
-## 📊 Monitoring
-
-| Methode | Endpoint | Funktion |
-|---|---|---|
-| POST | `/api/hosts/{host_id}/report` | Ergebnis melden |
-| GET | `/api/hosts/{host_id}/report` | Letzten Host-Report lesen |
-| GET | `/api/reports` | Letzte Reports aller Hosts lesen |
-
-Generierte Scripte melden am Ende Erfolg und über den ERR-Trap Fehler. Das Dashboard zeigt den zuletzt empfangenen Report. Speicherung: `app/config/reports.json`.
-
-Der HTTP-Aufruf hat einen Timeout und toleriert Übertragungsfehler. Eine erfolgreiche Zustellung ist nicht garantiert: Ein früher Abbruch vor Registrierung des Traps, ein ausgeschalteter Host oder ein nicht erreichbarer Orchestrator kann ohne Report bleiben. Ein alter grüner Report beweist keinen aktuellen Backup-Lauf. Aktuell gibt es keine vollständige Laufhistorie oder automatische Überfällig-Erkennung.
-
-Details: [docs/MONITORING.md](docs/MONITORING.md).
-
-## 🤖 MCP & REST-API
-
-MCP-Tools: `list_backup_hosts`, `get_backup_host`, `upsert_backup_host`, `regenerate_backup_script`, `get_backup_script`, `get_bootstrap_script`, `check_backup_api_health`.
-
-Den SSE-Endpunkt im Gateway manuell registrieren. Der MCP-Service authentifiziert sich intern gegenüber dem Orchestrator; das schützt nicht automatisch den extern veröffentlichten SSE-Port.
-
-REST-Verwaltung: `GET /api/hosts`, `GET /api/hosts/{host_id}`, `POST /api/hosts`, `POST /api/hosts/{host_id}/regenerate`, `GET /api/health`.
-
-Details: [MCP-Service](mcp_server/README.md) · [Integration](docs/mcp_integration.md).
+Monitoring-Schwellen (Intervall, Karenz, Einrichtungsfrist, NAS-Dateisystemtypen) stellst du im Adminmenü unter **Einstellungen** ein.
 
 ## 🛡️ Sicherheit & Grenzen
 
-- UI/API verwenden HTTP Basic Auth. Ohne konfiguriertes Passwort ist die API nicht nutzbar; Compose verlangt die Variable bereits beim Start.
-- HTTP verschlüsselt weder Passwort noch Script-Inhalte. Für nicht vollständig vertrauenswürdige Netze HTTPS/VPN und passende Zugriffsbeschränkungen verwenden; Ports nicht ungeschützt ins Internet veröffentlichen.
-- Bootstrap- und Backup-Scripte enthalten Zugangsdaten. Nur berechtigten Nutzern zugänglich machen und nicht ins Repo committen.
-- NAS-Mount und Zielpfad auf jedem Client prüfen. Ein vorhandenes Verzeichnis allein beweist keinen aktiven NAS-Mount.
-- Fehlende Container werden derzeit als Warnung übersprungen; ein abschließender OK-Report beweist deshalb nicht, dass alle vorgesehenen Container gesichert wurden.
-- Live-Dateikopien sind nicht automatisch anwendungskonsistent. Datenbank-Dumps und Restore-Tests bewusst planen.
-- Erst Testlauf, dann Wiederherstellungstest, dann produktiver Einsatz.
+- HTTP Basic Auth und Tokens laufen unverschlüsselt über HTTP: im LAN vertretbar, extern HTTPS/VPN vorschalten, Ports nicht ins Internet öffnen.
+- `hosts.yml` enthält die Host-Tokens im Klartext – nur für Administratoren lesbar halten und mit sichern.
+- Backup-Scripte auf den Clients enthalten ein Host-Token (Modus 700, nur root).
+- Alle Eingaben werden validiert, Script-Werte per `shlex.quote` gequotet, Formulare sind CSRF-geschützt.
+- „OK“ heißt: Alle konfigurierten Schritte liefen fehlerfrei. Es beweist nicht, dass die Konfiguration vollständig ist oder dass ein Restore funktioniert – **Restore-Tests bleiben Pflicht**.
+- Dateikopien laufender Anwendungen sind nicht automatisch konsistent; für Datenbanken `db_containers` nutzen.
+- Kein „Backup jetzt starten“ aus Web oder Bot: Das würde Fernausführung auf Clients erfordern.
+
+## 🧪 Tests
+
+```bash
+pip install -r requirements.txt -r telegram_bot/requirements.txt pytest httpx
+python -m pytest -q
+```
+
+Geprüft werden Validierung, SQLite-Speicher (parallele Schreibzugriffe, Migration), Zustandslogik, Enrollment, die generierten Bash-Scripte mit gemocktem Docker/NAS/curl/rsync, der Bot und die Templates. Die HTTP-API-Tests laufen in der CI. Ein End-to-End-Test auf deinen echten Hosts ersetzt das nicht.
 
 ## 🗺️ Roadmap
 
 | Status | Baustein |
 |---|---|
-| ✅ Im Code | Web-UI, REST-API, Host-Bootstrap und MCP-Service |
-| ✅ Im Code | Letzte Backup-Reports im Dashboard |
-| ✅ Konfiguriert | GHCR-Build-Workflow und Compose mit GHCR-Images |
-| 🟡 Geplant | Generisches Enroll-Script zusätzlich zum Host-Bootstrap |
-| 🟡 Geplant | Telegram-Admin-Bot mit Inline-Menüs |
-| 🟡 Geplant | Fehler sofort per Telegram, Erfolge gebündelt als Tagesdigest |
-| 🟡 Geplant | Erkennung fehlender Reports / überfälliger Backups |
-| 🟡 Geplant | Script-Auto-Updates und Host-Löschfunktion |
-
-„Im Code“ ist keine Aussage über erfolgreiches Deployment oder bestandene End-to-End-Tests.
+| ✅ | Adminmenü, Enroll + Bootstrap, SQLite-Monitoring, Telegram-Bot, MCP, GHCR mit Test-Gate |
+| 🟡 offen | Fernauslösung eines Backups (bräuchte einen sicheren Client-Agenten) |
+| 🟡 offen | Mehrere Datenpfade je Container bequemer im Formular, Restore-Assistent |
+| 🟡 offen | Eigene MCP-Tools für Reports und Pause |
 
 ## 📚 Dokumentation
 
-- [Architektur](docs/ARCHITECTURE.md)
-- [Rollout](docs/ROLLOUT.md)
-- [Monitoring](docs/MONITORING.md)
-- [MCP-Integration](docs/mcp_integration.md)
-- [Backup-Basisprojekt](https://github.com/jbkunama1/hAI.FullBackupScript)
-- [Restore-Anleitung](https://github.com/jbkunama1/hAI.FullBackupScript/blob/main/docs/RESTORE.md)
+[Architektur](docs/ARCHITECTURE.md) · [Rollout](docs/ROLLOUT.md) · [Enrollment](docs/ENROLLMENT.md) · [Monitoring](docs/MONITORING.md) · [Telegram](docs/TELEGRAM.md) · [MCP-Integration](docs/mcp_integration.md) · [Restore-Anleitung](https://github.com/jbkunama1/hAI.FullBackupScript/blob/main/docs/RESTORE.md)
 
 ## 📄 Lizenz
 

@@ -1,67 +1,46 @@
-# Monitoring: Backup-Reports
+# Monitoring
 
-Stand: 2026-10-26 (ab v1.2.0, Branch `feature/monitoring-reports`)
+## Meldungen der Clients
 
-## Ablauf
+Jeder Lauf sendet zwei Meldungen an `POST /api/hosts/<ID>/report` (Header `X-Host-Token`):
 
-Jedes generierte `full_backup_<HOST_ID>.sh` meldet seinen Lauf automatisch an
-`POST /api/hosts/<HOST_ID>/report` (HTTP Basic Auth, Credentials stehen wie
-beim Bootstrap-Script im generierten Script):
+1. `running` beim Start,
+2. `ok`, `warning` oder `error` beim Beenden (EXIT-Trap, auch bei Abbruch und vor dem Anlegen von Verzeichnissen).
 
-- **FEHLER**: der ERR-Trap ruft `report "error" <EXIT> "..."` auf -- inkl.
-  Exit-Code und Zeilennummer. Da der Report per HTTP laeuft und nicht ueber
-  das SMB-Share, kommt der Fehler-Report auch dann zentral an, wenn genau der
-  NAS-Mount die Fehlerursache war.
-- **ERFOLG**: am Script-Ende laeuft `report "ok" 0 "..."`.
+Felder: `run_id`, `status`, `exit_code`, `duration_seconds`, `size_bytes`, `warnings`, `started_at`, `message`.
 
-Mitgelieferte Felder: `status`, `exit_code`, `duration_seconds`
-(via `date +%s`), `size_bytes` (Groesse von `${RUN_DEST}` via `du -sb`),
-`message`.
+- **warning:** z. B. konfigurierter Container nicht gefunden – nie fälschlich „ok“.
+- **error:** fehlgeschlagene Sicherung, kein NAS-Mount, Ziel nicht beschreibbar u. a. Der ursprüngliche Exit-Code bleibt erhalten.
+- Meldungen laufen per HTTP, nicht über das NAS, und werden bei Ausfall lokal gespoolt (`/var/lib/hai-backup/<ID>/spool`) und nachgereicht. Doppelte Zustellung ist unschädlich (idempotent über `run_id`).
+- Ein hart beendeter Prozess (Stromausfall, `kill -9`) sendet keine Abschlussmeldung: Der Lauf bleibt „läuft“ und wird nach `max_run_hours` als **unklar** markiert.
 
-Wichtig: Alle Report-Aufrufe sind mit `|| true` abgesichert und haben ein
-curl-Timeout von 15 s -- ein Orchestrator-Ausfall darf das Backup selbst
-niemals blockieren oder zum Scheitern bringen.
+## Zustände
 
-## Persistenz
+| Zustand | Bedeutung |
+|---|---|
+| OK / WARNUNG / FEHLER | Ergebnis des letzten Laufs |
+| LÄUFT | Lauf aktiv (jünger als `max_run_hours`) |
+| ÜBERFÄLLIG | Letzter Lauf älter als Intervall + Karenz, oder seit der Einrichtung (+ Frist) nie eine Meldung |
+| KEINE MELDUNG | Neuer Host innerhalb der Einrichtungsfrist – das ist **nicht** „nie gelaufen“ |
+| UNKLAR | Lauf gestartet, nie abgeschlossen |
+| PAUSIERT | Monitoring bewusst ausgesetzt (Wartung) |
 
-Die Reports landen in `app/config/reports.json`. Der Pfad liegt im selben
-Bind-Mount wie `hosts.yml` (`./app/config:/app/config`), ueberlebt also
-Redeploys des Portainer-Git-Stacks. Die Datei ist in `.gitignore`
-eingetragen und wird nicht ins Repo committed.
+Standardwerte (Einstellungen in der Web-UI): Intervall 24 h, Karenz 4 h, Einrichtungsfrist 30 h, max. Laufzeit 12 h, Historie 200 Läufe je Host. Je Host kann ein eigenes Intervall gesetzt werden.
 
-## Endpunkte
+## Endpunkte (Admin)
 
 | Methode | Pfad | Zweck |
 |---|---|---|
-| POST | `/api/hosts/{host_id}/report` | Report nach einem Backup-Lauf melden |
-| GET | `/api/hosts/{host_id}/report` | Letzten Report eines Hosts abrufen |
-| GET | `/api/reports` | Letzte Reports aller Hosts abrufen |
+| GET | `/api/status` | Abgeleiteter Status aller Hosts |
+| GET | `/api/runs?host_id=&limit=` | Laufhistorie |
+| GET | `/api/digest?hours=24` | Datengrundlage des Tagesdigest |
+| GET | `/api/events?after=<id>` | Fehler-Ereignisse (Bot) |
+| GET | `/api/hosts/<ID>/report` | Letzter Lauf |
+| GET | `/api/reports` | Letzter Lauf je Host (kompatibel) |
+| POST | `/api/hosts/<ID>/pause` | Pausieren/Fortsetzen (Header `X-Requested-With`) |
 
-Beispiel-Report (JSON-Body des Scripts):
+## Grenzen
 
-```json
-{
-  "status": "ok",
-  "exit_code": 0,
-  "duration_seconds": 187,
-  "size_bytes": 2348810240,
-  "message": "Backup highfish5 erfolgreich abgeschlossen."
-}
-```
-
-`POST` antwortet mit `404`, wenn die Host-ID nicht konfiguriert ist, und mit
-`400`, wenn `status` nicht `ok` oder `error` ist. `GET` auf einen Host ohne
-bisherigen Report antwortet ebenfalls mit `404`.
-
-## Dashboard
-
-Die Host-Tabelle im Web-UI zeigt die Spalte **Letzter Lauf** mit Status-Pill
-(OK/FEHLER), Zeitpunkt, Dauer und Datenmenge. Die Host-Detailansicht erhaelt
-den letzten Report ebenfalls als Template-Kontext (`report`).
-
-## Bezug zum Telegram-Bot (Roadmap)
-
-Diese Reports bilden die Datenbasis fuer den geplanten `backup-telegram`-
-Service: Fehler sollen sofort gepusht werden, Erfolge als tagesgesammelter
-Digest (inkl. Liste der Hosts ohne Meldung, die nur ueber den Abgleich
-konfigurierter Hosts vs. eingegangener Reports erkennbar sind).
+- Der Orchestrator sieht nur, was gemeldet wird. Ein Host, der aus ist oder dessen Cron fehlt, fällt erst über „überfällig“ auf.
+- „OK“ bedeutet: alle konfigurierten Schritte liefen fehlerfrei – nicht, dass die Konfiguration vollständig ist und nicht, dass ein Restore funktioniert.
+- Dateikopien laufender Anwendungen sind nicht automatisch konsistent; für Datenbanken `db_containers` (pg_dumpall) nutzen.
