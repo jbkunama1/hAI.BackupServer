@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Monitoring · hAI.BackupServer{% endblock %}
+{% block content %}
+<h2>📈 Laufhistorie</h2>
+<form method="get" class="row filter"><label>Host
+  <select name="host" onchange="this.form.submit()"><option value="">Alle</option>
+  {% for h in hosts %}<option value="{{ h.host_id }}"{% if h.host_id == selected %} selected{% endif %}>{{ h.host_name }} ({{ h.host_id }})</option>{% endfor %}</select></label>
+  <noscript><button class="btn">Filtern</button></noscript></form>
+<div class="tablewrap"><table>
+  <thead><tr><th>Zeit (Server)</th><th>Host</th><th>Status</th><th>Dauer</th><th>Größe</th><th>Meldung</th></tr></thead>
+  <tbody>
+  {% for r in runs %}
+  <tr><td>{{ r.first_seen_at|fmt_ts }}</td><td>{{ r.host_id }}</td>
+    <td><span class="pill {{ {'ok':'ok','warning':'warn','error':'err','running':'info'}.get(r.status,'muted') }}">{{ r.status|upper }}</span></td>
+    <td>{{ r.duration_seconds|fmt_dur }}</td><td>{{ r.size_bytes|human_size }}</td><td class="wrap">{{ r.message }}</td></tr>
+  {% else %}<tr><td colspan="6" class="muted">Noch keine Läufe gemeldet.</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+<p class="muted">Ein fehlender Eintrag bedeutet „keine Meldung eingegangen“ – nicht automatisch „nicht gelaufen“. Ein hart abgebrochener Lauf (z. B. Stromausfall) bleibt als „LÄUFT“ stehen und wird nach der maximalen Laufzeit als „UNKLAR“ markiert.</p>
+{% endblock %}

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}hAI.BackupServer{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>🗄️ hAI.BackupServer</h1>
+  <nav aria-label="Hauptmenü">
+    <a href="/"{% if active == 'dashboard' %} aria-current="page"{% endif %}>📊 Dashboard</a>
+    <a href="/monitoring"{% if active == 'monitoring' %} aria-current="page"{% endif %}>📈 Monitoring</a>
+    <a href="/hosts/new"{% if active == 'new' %} aria-current="page"{% endif %}>➕ Neuer Host</a>
+    <a href="/enroll"{% if active == 'enroll' %} aria-current="page"{% endif %}>🚀 Einrichten</a>
+    <a href="/settings"{% if active == 'settings' %} aria-current="page"{% endif %}>⚙️ Einstellungen</a>
+  </nav>
+</header>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>

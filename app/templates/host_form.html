@@ -1,39 +1,18 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8">
-  <title>hAI.BackupServer - Host {{ "bearbeiten" if host else "anlegen" }}</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-<header>
-  <h1>🗄️ hAI.BackupServer</h1>
-  <a class="btn secondary" href="/">← Zurueck</a>
-</header>
-<main>
-  <div class="card">
-    <h2>Host {{ "bearbeiten" if host else "anlegen" }}</h2>
-    <form method="post" action="{{ action_url }}">
-      <label>Hostname
-        <input type="text" name="host_name" value="{{ host.host_name if host else '' }}" required>
-      </label>
-      <label>Host-ID (kurz, eindeutig, z.B. 5)
-        <input type="text" name="host_id" value="{{ host.host_id if host else '' }}" required {{ 'readonly' if host else '' }}>
-      </label>
-      <label>NAS-Mount-Name
-        <input type="text" name="nas_mount" value="{{ host.nas_mount if host else nas_mount_default }}" required>
-      </label>
-      <label>Container (ein Eintrag pro Zeile: name;volume_source_path)
-        <textarea name="containers_raw" rows="5" placeholder="homeassistant;/mnt/dietpi_userdata/docker-data/volumes/homeassistant_config/_data">{{ containers_raw if containers_raw else '' }}</textarea>
-      </label>
-      <label>DB-Container (ein Eintrag pro Zeile: name;db_user)
-        <textarea name="db_containers_raw" rows="3" placeholder="hai_anythingmcp_postgres;postgres">{{ db_containers_raw if db_containers_raw else '' }}</textarea>
-      </label>
-      <div class="row" style="margin-top:1.5rem;">
-        <button class="btn" type="submit">Speichern &amp; Script generieren</button>
-      </div>
-    </form>
-  </div>
-</main>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}{{ 'Host bearbeiten' if host else 'Neuer Host' }} · hAI.BackupServer{% endblock %}
+{% block content %}
+<h2>{{ '✏️ Host bearbeiten' if host else '➕ Neuer Host' }}</h2>
+<form method="post" action="{{ action_url }}" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Hostname<input name="host_name" value="{{ host.host_name if host else '' }}" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,62}"></label>
+  <label>Host-ID (A–Z, 0–9, _ -)<input name="host_id" value="{{ host.host_id if host else '' }}" required pattern="[A-Za-z0-9_\-]{1,32}"{% if host %} readonly{% endif %}></label>
+  <label>NAS-Bezeichnung<input name="nas_mount" value="{{ host.nas_mount if host else nas_mount_default }}" required></label>
+  <label>Container – eine Zeile pro Container: <code class="inline">name;/pfad1;/pfad2</code>
+    <textarea name="containers_raw" rows="6">{{ containers_raw }}</textarea></label>
+  <label>PostgreSQL-Container – <code class="inline">name;benutzer</code>
+    <textarea name="db_containers_raw" rows="3">{{ db_containers_raw }}</textarea></label>
+  <label>Erwartetes Intervall in Stunden (leer = globaler Standard)<input name="expected_interval_hours" value="{{ host.expected_interval_hours if host and host.expected_interval_hours else '' }}" inputmode="decimal"></label>
+  <label><input type="checkbox" name="auto_update"{% if host and host.auto_update %} checked{% endif %}> Script-Auto-Update auf dem Client (wirksam ab dem übernächsten Lauf, nur mit gültiger Syntax)</label>
+  <button class="btn" type="submit">Speichern</button> <a class="btn secondary" href="/">Abbrechen</a>
+</form>
+{% endblock %}

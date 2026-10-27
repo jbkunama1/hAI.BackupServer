@@ -1,437 +1,335 @@
-"""hAI.BackupServer - zentrales Backup-Control-Center.
+"""hAI.BackupServer - HTTP-Schicht (duenn; die Logik liegt in service.py).
 
-Web-UI + REST-API (mit HTTP Basic Auth) zur Verwaltung von Backup-Hosts und
-automatischen Generierung der pro Host individuellen full_backup_<HOST_ID>.sh
-Scripte auf Basis von hAI.FullBackupScript.
+Zugriffsmodell:
+  * Admin (HTTP Basic Auth): Web-UI und Verwaltungs-API
+  * Host-Token (Header X-Host-Token): nur Script-Abruf und Report des eigenen Hosts
+  * Enroll-Token (Header X-Enroll-Token): nur POST /api/enroll
 """
-import json
+import hashlib
+import hmac
 import os
+import re
 import secrets
-import shutil
-from datetime import datetime, timezone
+import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-import yaml
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from models import BackupReport, ContainerConfig, DbContainerConfig, HostConfig
-from script_generator import render_backup_script, render_bootstrap_script
+import confstore as cs
+import ui
+import validation as v
+from models import HostConfig
+from service import NotFound, Service
+from store import Store, now_iso
 
+VERSION = "2.0.0"
 BASE_DIR = Path(__file__).parent
-CONFIG_DIR = BASE_DIR / "config"
-CONFIG_FILE = CONFIG_DIR / "hosts.yml"
-CONFIG_EXAMPLE = CONFIG_DIR / "hosts.yml.example"
-REPORTS_FILE = CONFIG_DIR / "reports.json"
+CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", BASE_DIR / "config"))
 GENERATED_DIR = Path(os.environ.get("GENERATED_DIR", "/app/generated"))
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 ORCHESTRATOR_HOST = os.environ.get("ORCHESTRATOR_HOST", "192.168.178.26")
-CRON_SCHEDULE = os.environ.get("CRON_SCHEDULE", "0 3 * * *")
-
-# --------------------------------------------------------------------------
-# HTTP Basic Auth (schuetzt Web-UI, Script-/Bootstrap-Endpunkte und JSON-API)
-# --------------------------------------------------------------------------
 BASIC_AUTH_USER = os.environ.get("BASIC_AUTH_USER", "admin")
 BASIC_AUTH_PASSWORD = os.environ.get("BASIC_AUTH_PASSWORD", "")
+ENROLL_TOKEN = os.environ.get("ENROLL_TOKEN", "")
 
-_security = HTTPBasic()
+svc = Service(
+    cs.ConfigStore(CONFIG_DIR / "hosts.yml", CONFIG_DIR / "hosts.yml.example"),
+    Store(os.environ.get("DB_PATH", str(CONFIG_DIR / "backupserver.db"))),
+    ORCHESTRATOR_HOST, os.environ.get("CRON_SCHEDULE", "0 3 * * *"), ENROLL_TOKEN, GENERATED_DIR)
 
-
-def require_basic_auth(credentials: HTTPBasicCredentials = Depends(_security)) -> str:
-    if not BASIC_AUTH_PASSWORD:
-        # Fail-closed: ohne gesetztes Passwort ist der Server nicht nutzbar.
-        raise HTTPException(
-            status_code=500,
-            detail="BASIC_AUTH_PASSWORD ist nicht gesetzt. Bitte als Umgebungsvariable konfigurieren.",
-        )
-    correct_user = secrets.compare_digest(credentials.username, BASIC_AUTH_USER)
-    correct_pass = secrets.compare_digest(credentials.password, BASIC_AUTH_PASSWORD)
-    if not (correct_user and correct_pass):
-        raise HTTPException(
-            status_code=401,
-            detail="Ungueltige Zugangsdaten",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    return credentials.username
-
-
-app = FastAPI(
-    title="hAI.BackupServer",
-    version="1.2.0",
-    dependencies=[Depends(require_basic_auth)],
-)
+app = FastAPI(title="hAI.BackupServer", version=VERSION)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+ui.register(templates.env)
+
+_basic = HTTPBasic(auto_error=False)
+_ACTOR_RE = re.compile(r"^[A-Za-z0-9:_.@ -]{1,100}$")
 
 
-def _ensure_config() -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    if not CONFIG_FILE.exists() and CONFIG_EXAMPLE.exists():
-        shutil.copy(CONFIG_EXAMPLE, CONFIG_FILE)
+# ---------------------------------------------------------------- Auth ----
+def _basic_ok(creds: Optional[HTTPBasicCredentials]) -> bool:
+    if not BASIC_AUTH_PASSWORD:      # fail-closed
+        raise HTTPException(500, "BASIC_AUTH_PASSWORD ist nicht gesetzt. Bitte als Umgebungsvariable konfigurieren.")
+    if not creds:
+        return False
+    return (secrets.compare_digest(creds.username.encode(), BASIC_AUTH_USER.encode())
+            & secrets.compare_digest(creds.password.encode(), BASIC_AUTH_PASSWORD.encode()))
 
 
-def load_config() -> dict:
-    _ensure_config()
-    if not CONFIG_FILE.exists():
-        return {
-            "nas_mount_default": "highfishNAS25",
-            "nas_base_path": "/mnt/highfishNAS25/Sicherung",
-            "notifications": {"enabled": False, "method": "ntfy",
-                               "ntfy_topic": "hai-backup-alerts",
-                               "ntfy_server": "https://ntfy.sh", "email_to": ""},
-            "versioning": {"enabled": False, "keep_count": 5},
-            "hosts": [],
-        }
-    with open(CONFIG_FILE, "r", encoding="utf-8") as fh:
-        return yaml.safe_load(fh) or {}
+def _unauthorized():
+    return HTTPException(401, "Ungueltige Zugangsdaten", headers={"WWW-Authenticate": "Basic"})
 
 
-def save_config(cfg: dict) -> None:
-    with open(CONFIG_FILE, "w", encoding="utf-8") as fh:
-        yaml.safe_dump(cfg, fh, allow_unicode=True, sort_keys=False)
+def require_admin(request: Request, creds: Optional[HTTPBasicCredentials] = Depends(_basic)) -> str:
+    if not _basic_ok(creds):
+        raise _unauthorized()
+    actor = request.headers.get("x-actor", "")
+    return actor if _ACTOR_RE.match(actor) else creds.username
 
 
-# --------------------------------------------------------------------------
-# Monitoring: Backup-Reports (letztes Ergebnis pro Host)
-# --------------------------------------------------------------------------
-def load_reports() -> dict:
-    if not REPORTS_FILE.exists():
-        return {"reports": {}}
-    try:
-        data = json.loads(REPORTS_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {"reports": {}}
-    if not isinstance(data.get("reports"), dict):
-        data = {"reports": {}}
-    return data
+def host_or_admin(host_id: str, creds: Optional[HTTPBasicCredentials] = Depends(_basic),
+                  x_host_token: Optional[str] = Header(None)) -> str:
+    if x_host_token is not None:
+        if not svc.verify_host_token(host_id, x_host_token):
+            raise HTTPException(403, "Ungueltiges Host-Token")
+        return f"host:{host_id}"
+    if _basic_ok(creds):
+        return creds.username
+    raise _unauthorized()
 
 
-def save_reports(data: dict) -> None:
-    tmp = REPORTS_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(REPORTS_FILE)
+def require_xhr(x_requested_with: Optional[str] = Header(None)) -> None:
+    """Schutz vor Cross-Site-Formularposts auf mutierende JSON-Endpunkte."""
+    if not x_requested_with:
+        raise HTTPException(400, "Header X-Requested-With fehlt")
 
 
-def get_last_report(data: dict, host_id: str) -> Optional[BackupReport]:
-    entry = data.get("reports", {}).get(str(host_id))
-    if not entry:
-        return None
-    return BackupReport.from_dict(entry)
+def csrf_token(user: str) -> str:
+    return hmac.new(BASIC_AUTH_PASSWORD.encode(), f"csrf-v1:{user}".encode(), hashlib.sha256).hexdigest()
 
 
-def get_hosts(cfg: dict) -> List[HostConfig]:
-    return [HostConfig.from_dict(h) for h in cfg.get("hosts", [])]
+def check_csrf(user: str, token: str) -> None:
+    if not token or not hmac.compare_digest(token, csrf_token(user)):
+        raise HTTPException(403, "CSRF-Pruefung fehlgeschlagen - Seite neu laden")
 
 
-def find_host(cfg: dict, host_id: str) -> Optional[HostConfig]:
-    for h in get_hosts(cfg):
-        if h.host_id == str(host_id):
-            return h
-    return None
+@app.exception_handler(NotFound)
+async def _nf(request, exc):
+    return JSONResponse({"detail": str(exc)}, status_code=404)
 
 
-def upsert_host(cfg: dict, host: HostConfig) -> None:
-    hosts = cfg.setdefault("hosts", [])
-    for i, h in enumerate(hosts):
-        if str(h.get("host_id")) == host.host_id:
-            hosts[i] = host.to_dict()
-            return
-    hosts.append(host.to_dict())
+@app.exception_handler(v.ValidationError)
+async def _bad(request, exc):
+    return JSONResponse({"detail": str(exc)}, status_code=400)
 
 
-def _parse_containers(raw: str) -> List[ContainerConfig]:
-    result = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = [p.strip() for p in line.split(";")]
-        name = parts[0]
-        vol = parts[1] if len(parts) > 1 and parts[1] else None
-        result.append(ContainerConfig(name=name, volume_source_path=vol))
-    return result
+def page(request: Request, name: str, user: str, active: str, **ctx):
+    ctx.update(active=active, csrf=csrf_token(user), orchestrator_host=ORCHESTRATOR_HOST,
+               basic_auth_user=BASIC_AUTH_USER, enroll_enabled=bool(ENROLL_TOKEN))
+    return templates.TemplateResponse(request, name, ctx)
 
 
-def _parse_db_containers(raw: str) -> List[DbContainerConfig]:
-    result = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = [p.strip() for p in line.split(";")]
-        name = parts[0]
-        user = parts[1] if len(parts) > 1 and parts[1] else "postgres"
-        result.append(DbContainerConfig(name=name, db_user=user))
-    return result
+# ------------------------------------------- Agenten: Enroll, Script, Report
+@app.get("/enroll.sh", response_class=PlainTextResponse, summary="Universelles Enroll-Script (ohne Zugangsdaten)")
+def enroll_script():
+    return PlainTextResponse(svc.render_enroll(), media_type="text/x-shellscript")
 
 
-def _write_generated_script(host: HostConfig, cfg: dict) -> Path:
-    notif = cfg.get("notifications", {})
-    vers = cfg.get("versioning", {})
-    script = render_backup_script(
-        host=host,
-        nas_base_path=cfg.get("nas_base_path", "/mnt/highfishNAS25/Sicherung"),
-        notifications_enabled=notif.get("enabled", False),
-        notification_method=notif.get("method", "ntfy"),
-        ntfy_topic=notif.get("ntfy_topic", "hai-backup-alerts"),
-        ntfy_server=notif.get("ntfy_server", "https://ntfy.sh"),
-        email_to=notif.get("email_to", ""),
-        versioning_enabled=vers.get("enabled", False),
-        versioning_keep_count=vers.get("keep_count", 5),
-        orchestrator_host=ORCHESTRATOR_HOST,
-        report_user=BASIC_AUTH_USER,
-        report_password=BASIC_AUTH_PASSWORD,
-    )
-    out_path = GENERATED_DIR / f"full_backup_{host.host_id}.sh"
-    out_path.write_text(script, encoding="utf-8")
-    return out_path
+@app.post("/api/enroll", summary="Host per Enroll-Token registrieren", tags=["enrollment"])
+def api_enroll(payload: dict, format: str = "json", x_enroll_token: Optional[str] = Header(None)):
+    if not ENROLL_TOKEN:
+        raise HTTPException(503, "Enrollment ist nicht aktiviert (ENROLL_TOKEN nicht gesetzt)")
+    if not x_enroll_token or not secrets.compare_digest(x_enroll_token.encode(), ENROLL_TOKEN.encode()):
+        time.sleep(1)                      # bremst Durchprobieren
+        raise HTTPException(403, "Ungueltiges Enroll-Token")
+    res = svc.enroll(payload, bool(payload.get("update_config")))
+    if format == "env":
+        return PlainTextResponse(f"HOST_ID={res['host_id']}\nHOST_TOKEN={res['host_token']}\n"
+                                 f"CRON_SCHEDULE={res['cron_schedule']}\n")
+    return res
 
 
-# --------------------------------------------------------------------------
-# Web-UI
-# --------------------------------------------------------------------------
-@app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request):
-    cfg = load_config()
-    hosts = get_hosts(cfg)
-    reports = load_reports().get("reports", {})
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "hosts": hosts,
-        "reports": reports,
-        "nas_mount_default": cfg.get("nas_mount_default", "highfishNAS25"),
-        "nas_base_path": cfg.get("nas_base_path", "/mnt/highfishNAS25/Sicherung"),
-        "orchestrator_host": ORCHESTRATOR_HOST,
-    })
+@app.get("/script/{host_id}", response_class=PlainTextResponse, summary="Aktuelles Backup-Script eines Hosts")
+def get_script(host_id: str, _: str = Depends(host_or_admin)):
+    svc.regenerate(host_id)
+    return PlainTextResponse(svc.render_script(host_id), media_type="text/x-shellscript")
 
 
-@app.get("/hosts/new", response_class=HTMLResponse)
-def new_host_form(request: Request):
-    cfg = load_config()
-    return templates.TemplateResponse("host_form.html", {
-        "request": request,
-        "host": None,
-        "action_url": "/hosts/new",
-        "nas_mount_default": cfg.get("nas_mount_default", "highfishNAS25"),
-        "containers_raw": "",
-        "db_containers_raw": "",
-    })
+@app.post("/api/hosts/{host_id}/report", summary="Backup-Ergebnis melden", tags=["monitoring"])
+def api_report(host_id: str, payload: dict, _: str = Depends(host_or_admin)):
+    return {"status": "ok", "run": svc.submit_report(host_id, payload)["run"]}
 
 
-@app.post("/hosts/new")
-def create_host(
-    host_name: str = Form(...),
-    host_id: str = Form(...),
-    nas_mount: str = Form(...),
-    containers_raw: str = Form(""),
-    db_containers_raw: str = Form(""),
-):
-    cfg = load_config()
-    if find_host(cfg, host_id):
-        raise HTTPException(400, f"Host-ID {host_id} existiert bereits.")
-    host = HostConfig(
-        host_name=host_name,
-        host_id=host_id,
-        nas_mount=nas_mount,
-        containers=_parse_containers(containers_raw),
-        db_containers=_parse_db_containers(db_containers_raw),
-    )
-    upsert_host(cfg, host)
-    save_config(cfg)
-    _write_generated_script(host, cfg)
-    return RedirectResponse(f"/hosts/{host_id}", status_code=303)
+# ------------------------------------------------------------- Admin-API --
+@app.get("/bootstrap/{host_id}", response_class=PlainTextResponse, summary="Bootstrap-Script eines Hosts")
+def get_bootstrap(host_id: str, _: str = Depends(require_admin)):
+    return PlainTextResponse(svc.render_bootstrap(host_id), media_type="text/x-shellscript")
 
 
-@app.get("/hosts/{host_id}", response_class=HTMLResponse)
-def host_detail(request: Request, host_id: str):
-    cfg = load_config()
-    host = find_host(cfg, host_id)
-    if not host:
-        raise HTTPException(404, "Host nicht gefunden")
-    return templates.TemplateResponse("host_detail.html", {
-        "request": request,
-        "host": host,
-        "report": (get_last_report(load_reports(), host_id) or BackupReport(
-            host_id=host_id, status="none")).to_dict(),
-        "orchestrator_host": ORCHESTRATOR_HOST,
-        "basic_auth_user": BASIC_AUTH_USER,
-    })
-
-
-@app.get("/hosts/{host_id}/edit", response_class=HTMLResponse)
-def edit_host_form(request: Request, host_id: str):
-    cfg = load_config()
-    host = find_host(cfg, host_id)
-    if not host:
-        raise HTTPException(404, "Host nicht gefunden")
-    containers_raw = "\n".join(
-        f"{c.name};{c.volume_source_path or ''}" for c in host.containers
-    )
-    db_containers_raw = "\n".join(
-        f"{d.name};{d.db_user}" for d in host.db_containers
-    )
-    return templates.TemplateResponse("host_form.html", {
-        "request": request,
-        "host": host,
-        "action_url": f"/hosts/{host_id}/edit",
-        "nas_mount_default": cfg.get("nas_mount_default", "highfishNAS25"),
-        "containers_raw": containers_raw,
-        "db_containers_raw": db_containers_raw,
-    })
-
-
-@app.post("/hosts/{host_id}/edit")
-def update_host(
-    host_id: str,
-    host_name: str = Form(...),
-    nas_mount: str = Form(...),
-    containers_raw: str = Form(""),
-    db_containers_raw: str = Form(""),
-):
-    cfg = load_config()
-    if not find_host(cfg, host_id):
-        raise HTTPException(404, "Host nicht gefunden")
-    host = HostConfig(
-        host_name=host_name,
-        host_id=host_id,
-        nas_mount=nas_mount,
-        containers=_parse_containers(containers_raw),
-        db_containers=_parse_db_containers(db_containers_raw),
-    )
-    upsert_host(cfg, host)
-    save_config(cfg)
-    _write_generated_script(host, cfg)
-    return RedirectResponse(f"/hosts/{host_id}", status_code=303)
-
-
-# --------------------------------------------------------------------------
-# Script-/Bootstrap-Auslieferung (fuer Hosts + Agenten/MCP)
-# --------------------------------------------------------------------------
-@app.get("/script/{host_id}", response_class=PlainTextResponse, summary="Aktuelles Backup-Script eines Hosts abrufen")
-def get_script(host_id: str):
-    """Rendert und liefert das aktuelle full_backup_<HOST_ID>.sh fuer den angegebenen Host."""
-    cfg = load_config()
-    host = find_host(cfg, host_id)
-    if not host:
-        raise HTTPException(404, f"Host-ID {host_id} nicht konfiguriert")
-    script_path = _write_generated_script(host, cfg)
-    return PlainTextResponse(script_path.read_text(encoding="utf-8"), media_type="text/x-shellscript")
-
-
-@app.get("/bootstrap/{host_id}", response_class=PlainTextResponse, summary="Bootstrap-Script fuer einen neuen Host abrufen")
-def get_bootstrap(host_id: str):
-    """Liefert das einmalig auf einem neuen Server auszufuehrende Bootstrap-Script."""
-    cfg = load_config()
-    host = find_host(cfg, host_id)
-    if not host:
-        raise HTTPException(404, f"Host-ID {host_id} nicht konfiguriert")
-    script = render_bootstrap_script(
-        host, ORCHESTRATOR_HOST, CRON_SCHEDULE,
-        basic_auth_user=BASIC_AUTH_USER,
-        basic_auth_password=BASIC_AUTH_PASSWORD,
-    )
-    return PlainTextResponse(script, media_type="text/x-shellscript")
-
-
-# --------------------------------------------------------------------------
-# JSON-API (fuer MCP-Tools / Agenten) - jeder Endpoint einzeln dokumentiert,
-# damit ein MCP-/OpenAPI-Import saubere Tool-Namen und Beschreibungen erzeugt.
-# --------------------------------------------------------------------------
 @app.get("/api/hosts", summary="Alle Backup-Hosts auflisten", tags=["backup-hosts"])
-def api_list_hosts():
-    """Gibt alle in hosts.yml konfigurierten Backup-Hosts zurueck."""
-    cfg = load_config()
-    return {"hosts": [h.to_dict() for h in get_hosts(cfg)]}
+def api_list_hosts(_: str = Depends(require_admin)):
+    return {"hosts": [h.public_dict() for h in cs.get_hosts(svc.cfg())]}
 
 
 @app.get("/api/hosts/{host_id}", summary="Details zu einem Backup-Host", tags=["backup-hosts"])
-def api_get_host(host_id: str):
-    """Gibt Hostname, NAS-Mount, Container und DB-Container eines Hosts zurueck."""
-    cfg = load_config()
-    host = find_host(cfg, host_id)
-    if not host:
-        raise HTTPException(404, f"Host-ID {host_id} nicht konfiguriert")
-    return host.to_dict()
+def api_get_host(host_id: str, _: str = Depends(require_admin)):
+    return svc.host(host_id).public_dict()
 
 
 @app.post("/api/hosts", summary="Backup-Host anlegen oder aktualisieren", tags=["backup-hosts"])
-def api_create_or_update_host(payload: dict):
-    """Legt einen Host an oder aktualisiert ihn (per host_id) und generiert sofort das Backup-Script."""
-    cfg = load_config()
+def api_upsert_host(payload: dict, actor: str = Depends(require_admin)):
     host = HostConfig.from_dict(payload)
-    upsert_host(cfg, host)
-    save_config(cfg)
-    _write_generated_script(host, cfg)
-    return {"status": "ok", "host": host.to_dict()}
+    existing = cs.find_host(svc.cfg(), host.host_id)
+    if existing:                                   # nicht mitgeschickte Felder behalten (z. B. MCP-Upsert)
+        for key in ("expected_interval_hours", "auto_update"):
+            if key not in payload:
+                setattr(host, key, getattr(existing, key))
+    return {"status": "ok", "host": svc.save_host(host, actor).public_dict()}
 
 
 @app.post("/api/hosts/{host_id}/regenerate", summary="Backup-Script neu generieren", tags=["backup-hosts"])
-def api_regenerate_script(host_id: str):
-    """Erzwingt die Neugenerierung des Backup-Scripts fuer einen Host (z.B. nach Config-Aenderung)."""
-    cfg = load_config()
-    host = find_host(cfg, host_id)
-    if not host:
-        raise HTTPException(404, f"Host-ID {host_id} nicht konfiguriert")
-    path = _write_generated_script(host, cfg)
-    return {"status": "ok", "script_path": str(path)}
+def api_regenerate(host_id: str, actor: str = Depends(require_admin)):
+    path = svc.regenerate(host_id)
+    svc.store.audit(actor, "script_regenerate", host_id)
+    return {"status": "ok", "script_path": path}
 
 
-# --------------------------------------------------------------------------
-# Monitoring-API: Reports entgegennehmen und auslesen
-# --------------------------------------------------------------------------
-@app.post("/api/hosts/{host_id}/report", summary="Backup-Ergebnis eines Hosts melden", tags=["monitoring"])
-def api_report_backup(host_id: str, payload: dict):
-    """Speichert den Ergebnis-Report (status ok/error, exit_code, duration_seconds,
-    size_bytes, message) eines abgeschlossenen Backup-Laufs. Wird von den
-    generierten full_backup_<HOST_ID>.sh Scripten per ERR-Trap bzw. Endmeldung
-    automatisch aufgerufen."""
-    cfg = load_config()
-    host = find_host(cfg, host_id)
-    if not host:
-        raise HTTPException(404, f"Host-ID {host_id} nicht konfiguriert")
-    status = str(payload.get("status", "")).lower()
-    if status not in ("ok", "error"):
-        raise HTTPException(400, "status muss 'ok' oder 'error' sein")
-    report = BackupReport(
-        host_id=host.host_id,
-        status=status,
-        exit_code=int(payload.get("exit_code", 0)),
-        duration_seconds=float(payload.get("duration_seconds", 0)),
-        size_bytes=int(payload.get("size_bytes", 0)),
-        message=str(payload.get("message", "")),
-        reported_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    )
-    data = load_reports()
-    data.setdefault("reports", {})[host.host_id] = report.to_dict()
-    save_reports(data)
-    return {"status": "ok", "report": report.to_dict()}
+@app.post("/api/hosts/{host_id}/pause", summary="Monitoring pausieren/fortsetzen", tags=["monitoring"],
+          dependencies=[Depends(require_xhr)])
+def api_pause(host_id: str, payload: dict, actor: str = Depends(require_admin)):
+    svc.set_paused(host_id, bool(payload.get("paused", True)), actor)
+    return {"status": "ok", "paused": bool(payload.get("paused", True))}
 
 
-@app.get("/api/hosts/{host_id}/report", summary="Letzten Backup-Report eines Hosts abrufen", tags=["monitoring"])
-def api_get_backup_report(host_id: str):
-    """Gibt den zuletzt gemeldeten Backup-Report eines Hosts zurueck
-    (404, wenn noch nie ein Report einging)."""
-    cfg = load_config()
-    host = find_host(cfg, host_id)
-    if not host:
-        raise HTTPException(404, f"Host-ID {host_id} nicht konfiguriert")
-    report = get_last_report(load_reports(), host_id)
-    if not report:
+@app.get("/api/hosts/{host_id}/report", summary="Letzten Report eines Hosts", tags=["monitoring"])
+def api_last_report(host_id: str, _: str = Depends(require_admin)):
+    svc.host(host_id)
+    last = svc.store.last_run(host_id)
+    if not last:
         raise HTTPException(404, f"Fuer Host-ID {host_id} liegt noch kein Report vor")
-    return report.to_dict()
+    return last
 
 
-@app.get("/api/reports", summary="Letzte Backup-Reports aller Hosts abrufen", tags=["monitoring"])
-def api_list_reports():
-    """Gibt pro Host den jeweils letzten eingehenden Backup-Report zurueck."""
-    return load_reports()
+@app.get("/api/reports", summary="Letzter Lauf je Host (kompatibel)", tags=["monitoring"])
+def api_reports(_: str = Depends(require_admin)):
+    return {"reports": svc.store.latest_per_host()}
+
+
+@app.get("/api/runs", summary="Laufhistorie", tags=["monitoring"])
+def api_runs(host_id: Optional[str] = None, limit: int = 50, _: str = Depends(require_admin)):
+    return {"runs": svc.store.list_runs(host_id, limit)}
+
+
+@app.get("/api/status", summary="Abgeleiteter Status aller Hosts", tags=["monitoring"])
+def api_status(_: str = Depends(require_admin)):
+    return svc.status()
+
+
+@app.get("/api/digest", summary="Zusammenfassung fuer Tagesdigest", tags=["monitoring"])
+def api_digest(hours: float = 24, _: str = Depends(require_admin)):
+    return svc.digest(hours)
+
+
+@app.get("/api/events", summary="Ereignisse (Fehler) fuer den Telegram-Bot", tags=["monitoring"])
+def api_events(after: int = 0, types: str = "run_error", limit: int = 100, actor: str = Depends(require_admin)):
+    if actor.startswith("telegram"):
+        svc.store.meta_set("bot_last_seen", now_iso())
+    wanted = tuple(t for t in types.split(",") if re.fullmatch(r"[a-z_]{1,30}", t)) or ("run_error",)
+    return {"events": svc.store.events_after(after, wanted, min(limit, 200))}
 
 
 @app.get("/api/health", summary="Health-Check", tags=["system"])
-def health():
-    return {"status": "ok", "service": "hAI.BackupServer"}
+def health(_: str = Depends(require_admin)):
+    svc.store.meta_get("x")
+    return {"status": "ok", "service": "hAI.BackupServer", "version": VERSION}
+
+
+# ---------------------------------------------------------------- Web-UI --
+@app.get("/")
+def dashboard(request: Request, user: str = Depends(require_admin)):
+    rows = svc.overview()
+    counts = {}
+    for r in rows:
+        counts[r["state"]] = counts.get(r["state"], 0) + 1
+    cfg = svc.cfg()
+    return page(request, "dashboard.html", user, "dashboard", rows=rows, counts=counts,
+                nas_base_path=cfg.get("nas_base_path", ""))
+
+
+@app.get("/monitoring")
+def monitoring_page(request: Request, host: str = "", user: str = Depends(require_admin)):
+    return page(request, "monitoring.html", user, "monitoring", runs=svc.store.list_runs(host or None, 100),
+                hosts=cs.get_hosts(svc.cfg()), selected=host)
+
+
+@app.get("/enroll")
+def enroll_page(request: Request, user: str = Depends(require_admin)):
+    return page(request, "enroll.html", user, "enroll", nas_base_path=svc.cfg().get("nas_base_path", ""))
+
+
+@app.get("/settings")
+def settings_page(request: Request, user: str = Depends(require_admin)):
+    return page(request, "settings.html", user, "settings", mon=cs.monitoring(svc.cfg()),
+                bot_seen=svc.store.meta_get("bot_last_seen"), audit=svc.store.list_audit(15), version=VERSION)
+
+
+@app.post("/settings")
+async def settings_save(request: Request, user: str = Depends(require_admin)):
+    form = dict(await request.form())
+    check_csrf(user, str(form.get("csrf", "")))
+    svc.update_settings(form, user)
+    return RedirectResponse("/settings", status_code=303)
+
+
+def _host_from_form(form: dict, host_id: str) -> HostConfig:
+    return HostConfig(
+        host_name=str(form.get("host_name", "")).strip(), host_id=host_id,
+        nas_mount=str(form.get("nas_mount", "")).strip(),
+        containers=svc.parse_containers(str(form.get("containers_raw", ""))),
+        db_containers=svc.parse_db_containers(str(form.get("db_containers_raw", ""))),
+        expected_interval_hours=v.number(form.get("expected_interval_hours"), "Intervall", 1, 744, None),
+        auto_update=bool(form.get("auto_update")))
+
+
+@app.get("/hosts/new")
+def new_host_form(request: Request, user: str = Depends(require_admin)):
+    return page(request, "host_form.html", user, "new", host=None, action_url="/hosts/new", containers_raw="",
+                db_containers_raw="", nas_mount_default=svc.cfg().get("nas_mount_default", "highfishNAS25"))
+
+
+@app.post("/hosts/new")
+async def create_host(request: Request, user: str = Depends(require_admin)):
+    form = dict(await request.form())
+    check_csrf(user, str(form.get("csrf", "")))
+    host = svc.save_host(_host_from_form(form, str(form.get("host_id", "")).strip()), user, create_only=True)
+    return RedirectResponse(f"/hosts/{host.host_id}", status_code=303)
+
+
+@app.get("/hosts/{host_id}")
+def host_detail(request: Request, host_id: str, user: str = Depends(require_admin)):
+    host = svc.host(host_id)
+    info = next(r for r in svc.overview() if r["host"]["host_id"] == host_id)
+    return page(request, "host_detail.html", user, "dashboard", host=host, info=info,
+                runs=svc.store.list_runs(host_id, 20))
+
+
+@app.get("/hosts/{host_id}/edit")
+def edit_host_form(request: Request, host_id: str, user: str = Depends(require_admin)):
+    host = svc.host(host_id)
+    raw_c = "\n".join(";".join([c.name, *c.all_paths()]) for c in host.containers)
+    raw_d = "\n".join(f"{d.name};{d.db_user}" for d in host.db_containers)
+    return page(request, "host_form.html", user, "dashboard", host=host, action_url=f"/hosts/{host_id}/edit",
+                containers_raw=raw_c, db_containers_raw=raw_d, nas_mount_default="")
+
+
+@app.post("/hosts/{host_id}/edit")
+async def update_host(request: Request, host_id: str, user: str = Depends(require_admin)):
+    form = dict(await request.form())
+    check_csrf(user, str(form.get("csrf", "")))
+    svc.host(host_id)
+    svc.save_host(_host_from_form(form, host_id), user)
+    return RedirectResponse(f"/hosts/{host_id}", status_code=303)
+
+
+@app.post("/hosts/{host_id}/pause")
+async def pause_form(request: Request, host_id: str, user: str = Depends(require_admin)):
+    form = dict(await request.form())
+    check_csrf(user, str(form.get("csrf", "")))
+    svc.set_paused(host_id, str(form.get("paused", "1")) == "1", user)
+    return RedirectResponse(f"/hosts/{host_id}", status_code=303)
+
+
+@app.post("/hosts/{host_id}/delete")
+async def delete_form(request: Request, host_id: str, user: str = Depends(require_admin)):
+    form = dict(await request.form())
+    check_csrf(user, str(form.get("csrf", "")))
+    if str(form.get("confirm", "")).strip() != host_id:
+        raise HTTPException(400, "Bestaetigung stimmt nicht mit der Host-ID ueberein")
+    svc.delete_host(host_id, user)
+    return RedirectResponse("/", status_code=303)

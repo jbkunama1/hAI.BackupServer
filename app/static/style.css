@@ -1,19 +1,33 @@
-body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#0f172a; color:#e2e8f0; }
-header { background:#111827; padding:1rem 2rem; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #1f2937; }
-header h1 { font-size:1.1rem; margin:0; }
-main { padding:2rem; max-width:1100px; margin:0 auto; }
-table { width:100%; border-collapse:collapse; margin-top:1rem; }
-th, td { text-align:left; padding:0.6rem 0.8rem; border-bottom:1px solid #1f2937; }
-th { color:#94a3b8; font-weight:600; font-size:0.85rem; text-transform:uppercase; }
-a.btn, button.btn { background:#2563eb; color:white; padding:0.5rem 1rem; border-radius:6px; text-decoration:none; border:none; cursor:pointer; font-size:0.9rem; }
-a.btn.secondary, button.btn.secondary { background:#334155; }
-a.btn.danger, button.btn.danger { background:#b91c1c; }
-.card { background:#1e293b; padding:1.5rem; border-radius:10px; margin-bottom:1.5rem; }
-form label { display:block; margin-top:1rem; font-size:0.85rem; color:#94a3b8; }
-form input, form textarea, form select { width:100%; padding:0.5rem; border-radius:6px; border:1px solid #334155; background:#0f172a; color:#e2e8f0; margin-top:0.25rem; }
-.pill { display:inline-block; padding:0.15rem 0.6rem; border-radius:999px; font-size:0.75rem; background:#334155; margin-right:0.3rem; }
-.pill.ok { background:#15803d; color:#f0fdf4; }
-.pill.err { background:#b91c1c; color:#fef2f2; }
-code, pre { background:#0f172a; padding:0.6rem; border-radius:6px; display:block; overflow-x:auto; }
-.row { display:flex; gap:1rem; flex-wrap:wrap; }
-.muted { color:#94a3b8; font-size:0.85rem; }
+*{box-sizing:border-box}
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#0f172a;color:#e2e8f0;line-height:1.45}
+header{background:#111827;padding:.8rem 1.5rem;display:flex;gap:1rem;flex-wrap:wrap;justify-content:space-between;align-items:center;border-bottom:1px solid #1f2937}
+header h1{font-size:1.1rem;margin:0}
+nav{display:flex;gap:.4rem;flex-wrap:wrap}
+nav a{color:#cbd5e1;text-decoration:none;padding:.4rem .8rem;border-radius:6px}
+nav a:hover,nav a:focus-visible{background:#1e293b;outline:2px solid #3b82f6}
+nav a[aria-current=page]{background:#2563eb;color:#fff}
+main{padding:1.5rem;max-width:1150px;margin:0 auto}
+a{color:#93c5fd}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;margin-top:1rem}
+th,td{text-align:left;padding:.6rem .8rem;border-bottom:1px solid #1f2937;vertical-align:top}
+th{color:#94a3b8;font-weight:600;font-size:.8rem;text-transform:uppercase}
+td.wrap{max-width:420px;overflow-wrap:anywhere}
+a.btn,button.btn{display:inline-block;background:#2563eb;color:#fff;padding:.5rem 1rem;border-radius:6px;text-decoration:none;border:none;cursor:pointer;font-size:.9rem}
+a.btn:focus-visible,button.btn:focus-visible{outline:2px solid #fff;outline-offset:2px}
+a.btn.secondary,button.btn.secondary{background:#334155}
+a.btn.danger,button.btn.danger{background:#b91c1c}
+.card{background:#1e293b;padding:1.2rem 1.5rem;border-radius:10px;margin-bottom:1.2rem}
+.danger-zone{border:1px solid #7f1d1d}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:.8rem;margin-bottom:1rem}
+.stat{margin:0;text-align:center}.stat strong{display:block;font-size:1.6rem}
+form label{display:block;margin-top:1rem;font-size:.85rem;color:#94a3b8}
+form input,form textarea,form select{width:100%;padding:.5rem;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;margin-top:.25rem;font:inherit}
+form input[type=checkbox]{width:auto;margin-right:.5rem}
+.pill{display:inline-block;padding:.15rem .6rem;border-radius:999px;font-size:.75rem;background:#334155;margin-right:.3rem}
+.pill.ok{background:#15803d}.pill.warn{background:#a16207}.pill.err{background:#b91c1c}.pill.info{background:#1d4ed8}.pill.muted{background:#334155;color:#cbd5e1}
+code,pre{background:#0f172a;border-radius:6px;overflow-x:auto}
+pre{padding:.8rem;display:block}code.inline{padding:.1rem .35rem;display:inline}
+.row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}.row form{margin:0}
+.muted{color:#94a3b8;font-size:.85rem}
+.filter label{margin:0}

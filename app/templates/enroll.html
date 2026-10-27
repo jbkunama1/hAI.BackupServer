@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Einrichten · hAI.BackupServer{% endblock %}
+{% block content %}
+<h2>🚀 Neuen Host einrichten</h2>
+<div class="card">
+  <p>Status: {% if enroll_enabled %}<span class="pill ok">Enrollment aktiv</span>{% else %}<span class="pill err">Deaktiviert</span> – Umgebungsvariable <code class="inline">ENROLL_TOKEN</code> setzen und Stack neu deployen.{% endif %}</p>
+  <p class="muted">Das Enroll-Token wird hier nie angezeigt. Voraussetzung auf jedem Host: Docker, rsync, curl, findmnt – und das NAS ist unter <code class="inline">{{ nas_base_path }}</code> bereits gemountet (das Script richtet keinen Mount ein).</p>
+  <h3>Variante A – universell (Auto-Erkennung)</h3>
+<pre>curl -fsS http://{{ orchestrator_host }}:8080/enroll.sh -o enroll.sh
+less enroll.sh                     # vor dem Ausführen prüfen
+sudo ./enroll.sh --dry-run         # nur anzeigen, was erkannt wird
+sudo ./enroll.sh                   # fragt Token und Container ab</pre>
+  <h3>Variante B – manuell angelegter Host</h3>
+<pre>curl -fsS -u {{ basic_auth_user }} http://{{ orchestrator_host }}:8080/bootstrap/HOST_ID -o bootstrap.sh
+less bootstrap.sh
+sudo bash bootstrap.sh --run-now</pre>
+  <p class="muted">Beide Wege bleiben parallel nutzbar. Beide legen <code class="inline">/etc/cron.d/hai-backup-&lt;ID&gt;</code> an (idempotent) und verwenden ein host-spezifisches Token statt des Admin-Passworts.</p>
+</div>
+{% endblock %}
