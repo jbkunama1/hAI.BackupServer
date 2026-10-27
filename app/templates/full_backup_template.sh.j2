@@ -1,138 +1,237 @@
 #!/bin/bash
 ###############################################################################
-# hAI.FullBackupScript - AUTOMATISCH GENERIERT von hAI.BackupServer
-#
-# Host:        {{ host_name }}
-# Host-ID:     {{ host_id }}
-# NAS-Mount:   {{ nas_mount }}
-# Generiert:   {{ generated_at }}
-#
-# NICHT MANUELL BEARBEITEN - Aenderungen gehen beim naechsten Rollout verloren.
-# Aenderungen bitte im Web-UI unter http://{{ orchestrator_host }}:8080/hosts/{{ host_id }}
-# vornehmen und den Host anschliessend neu bootstrappen bzw. das Script neu ziehen.
+# hAI.BackupServer - AUTOMATISCH GENERIERT (nicht manuell bearbeiten)
+# Host:      {{ host_name|comment }}   (ID {{ host_id|comment }})
+# Generiert: {{ generated_at }}
+# Aenderungen im Web-UI vornehmen; Script neu ziehen oder Auto-Update aktivieren.
+# Enthaelt ein host-spezifisches Token: Datei nur fuer root lesbar halten (chmod 700).
 ###############################################################################
+set -uo pipefail
+umask 077
 
-set -euo pipefail
-
-### --- Konfiguration (aus hosts.yml generiert) -----------------------------
-HOSTNAME="{{ host_name }}"
-HOST_ID="{{ host_id }}"
-NAS_MOUNT="{{ nas_mount }}"
-NAS_BASE_PATH="{{ nas_base_path }}"
-BACKUP_DEST="${NAS_BASE_PATH}/${HOSTNAME}"
-TIMESTAMP="$(date +%Y-%m-%d_%H-%M-%S)"
-LOGFILE="/var/log/backup_${HOST_ID}.log"
-START_TS="$(date +%s)"
-
-ENABLE_NOTIFICATIONS={{ "true" if notifications_enabled else "false" }}
-NOTIFY_METHOD="{{ notification_method }}"
-NTFY_TOPIC="{{ ntfy_topic }}"
-NTFY_SERVER="{{ ntfy_server }}"
-EMAIL_TO="{{ email_to }}"
-
-ENABLE_VERSIONING={{ "true" if versioning_enabled else "false" }}
+HOSTNAME_CFG={{ host_name|shq }}
+HOST_ID={{ host_id|shq }}
+NAS_MOUNT={{ nas_mount|shq }}
+NAS_BASE_PATH={{ nas_base_path|shq }}
+REQUIRE_NAS_MOUNT={{ 'true' if require_nas_mount else 'false' }}
+NAS_FSTYPES={{ nas_fstypes|shq }}
+BACKUP_DEST="${NAS_BASE_PATH}/${HOSTNAME_CFG}"
+ORCH_URL={{ orchestrator_url|shq }}
+HOST_TOKEN={{ host_token|shq }}
+AUTO_UPDATE={{ 'true' if auto_update else 'false' }}
+ENABLE_NOTIFICATIONS={{ 'true' if notifications_enabled else 'false' }}
+NOTIFY_METHOD={{ notification_method|shq }}
+NTFY_TOPIC={{ ntfy_topic|shq }}
+NTFY_SERVER={{ ntfy_server|shq }}
+EMAIL_TO={{ email_to|shq }}
+ENABLE_VERSIONING={{ 'true' if versioning_enabled else 'false' }}
 VERSION_KEEP_COUNT={{ versioning_keep_count }}
 
-### --- Monitoring: Report an den Orchestrator -------------------------------
-REPORT_URL="http://{{ orchestrator_host }}:8080/api/hosts/{{ host_id }}/report"
-REPORT_USER="{{ report_user }}"
-REPORT_PASSWORD="{{ report_password }}"
-
-mkdir -p "${BACKUP_DEST}"
+STATE_DIR="${HAI_STATE_DIR:-/var/lib/hai-backup}/${HOST_ID}"
+SPOOL_DIR="${STATE_DIR}/spool"
+LOGFILE="${HAI_LOGFILE:-/var/log/backup_${HOST_ID}.log}"
+SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+START_TS="$(date +%s)"
+TIMESTAMP="$(date +%Y-%m-%d_%H-%M-%S)"
+RUN_ID="$(date +%Y%m%dT%H%M%S)-$$-${RANDOM}"
+FAILED=0
+WARNINGS=0
+MESSAGES=""
+RUN_DEST=""
 
 log() {
-  echo "[$(date +%Y-%m-%d\ %H:%M:%S)] $*" | tee -a "${LOGFILE}"
+  local m
+  m="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+  echo "$m"
+  echo "$m" >> "$LOGFILE" 2>/dev/null || true
+}
+note_fail() { FAILED=$((FAILED + 1)); MESSAGES="${MESSAGES}FEHLER: $* | "; log "FEHLER: $*"; }
+note_warn() { WARNINGS=$((WARNINGS + 1)); MESSAGES="${MESSAGES}WARNUNG: $* | "; log "WARNUNG: $*"; }
+fatal() { note_fail "$*"; exit 2; }
+
+json_escape() {
+  printf '%s' "$1" | tr '\n\t\r' '   ' | tr -d '\000-\037' \
+    | { iconv -c -f UTF-8 -t UTF-8 2>/dev/null || cat; } \
+    | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+send_spooled() {
+  [ -d "$SPOOL_DIR" ] || return 0
+  local f
+  for f in "$SPOOL_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    if curl -fsS -m 15 --retry 2 --retry-delay 1 -H "X-Host-Token: ${HOST_TOKEN}" \
+         -H 'Content-Type: application/json' --data-binary "@${f}" \
+         "${ORCH_URL}/api/hosts/${HOST_ID}/report" >/dev/null 2>&1; then
+      rm -f "$f"
+    else
+      break
+    fi
+  done
+}
+
+emit_report() {
+  local status="$1" rc="$2" msg="$3" now dur size=0 started f
+  now="$(date +%s)"
+  dur=$((now - START_TS))
+  if [ "$status" != "running" ] && [ -n "$RUN_DEST" ] && [ -d "$RUN_DEST" ]; then
+    size="$(du -sb "$RUN_DEST" 2>/dev/null | cut -f1)"
+    size="${size:-0}"
+  fi
+  started="$(date -u -d "@${START_TS}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+  mkdir -p "$SPOOL_DIR" 2>/dev/null || return 0
+  f="${SPOOL_DIR}/$(date +%s%N)-${status}.json"
+  printf '{"run_id":"%s","status":"%s","exit_code":%s,"duration_seconds":%s,"size_bytes":%s,"warnings":%s,"started_at":"%s","message":"%s"}\n' \
+    "$RUN_ID" "$status" "$rc" "$dur" "$size" "$WARNINGS" "$started" "$(json_escape "$msg")" > "$f" 2>/dev/null || return 0
+  ls -1t "$SPOOL_DIR"/*.json 2>/dev/null | tail -n +51 | xargs -r rm -f
+  send_spooled
 }
 
 notify() {
-  local status="$1"
-  local message="$2"
-  [ "${ENABLE_NOTIFICATIONS}" = "true" ] || return 0
-  if [ "${NOTIFY_METHOD}" = "ntfy" ]; then
-    curl -fsSL -H "Title: Backup ${HOSTNAME} - ${status}" \
-      -d "${message}" "${NTFY_SERVER}/${NTFY_TOPIC}" >/dev/null 2>&1 || true
-  elif [ "${NOTIFY_METHOD}" = "email" ] && [ -n "${EMAIL_TO}" ]; then
-    echo "${message}" | mail -s "Backup ${HOSTNAME} - ${status}" "${EMAIL_TO}" || true
+  [ "$ENABLE_NOTIFICATIONS" = "true" ] || return 0
+  local status="$1" message="$2"
+  if [ "$NOTIFY_METHOD" = "ntfy" ]; then
+    curl -fsS -m 10 -H "Title: Backup ${HOSTNAME_CFG} - ${status}" -d "$message" \
+      "${NTFY_SERVER}/${NTFY_TOPIC}" >/dev/null 2>&1 || true
+  elif [ "$NOTIFY_METHOD" = "email" ] && [ -n "$EMAIL_TO" ]; then
+    echo "$message" | mail -s "Backup ${HOSTNAME_CFG} - ${status}" "$EMAIL_TO" || true
   fi
 }
 
-report() {
-  # Meldet den Lauf an den Orchestrator. NIEMALS das Backup blockieren:
-  # alle Schritte sind fehlertolerant (|| true / Fallbacks).
-  local status="$1"
-  local exit_code="$2"
-  local message="$3"
-  local end_ts duration size_bytes
-  end_ts="$(date +%s)"
-  duration=$((end_ts - START_TS))
-  size_bytes=0
-  if [ -n "${RUN_DEST:-}" ] && [ -d "${RUN_DEST}" ]; then
-    size_bytes="$(du -sb "${RUN_DEST}" 2>/dev/null | cut -f1 || echo 0)"
-    size_bytes="${size_bytes:-0}"
+on_exit() {
+  local rc=$?
+  trap - EXIT
+  local status msg
+  if [ "$rc" -ne 0 ] || [ "$FAILED" -gt 0 ]; then
+    status="error"
+    [ "$rc" -eq 0 ] && rc=1
+  elif [ "$WARNINGS" -gt 0 ]; then
+    status="warning"
+  else
+    status="ok"
   fi
-  curl -fsSL -m 15 -u "${REPORT_USER}:${REPORT_PASSWORD}" \
-    -H "Content-Type: application/json" \
-    -d "$(printf '{"status":"%s","exit_code":%s,"duration_seconds":%s,"size_bytes":%s,"message":"%s"}' \
-      "${status}" "${exit_code}" "${duration}" "${size_bytes}" "${message}")" \
-    "${REPORT_URL}" >/dev/null 2>&1 || true
+  msg="${MESSAGES:-Backup ${HOSTNAME_CFG} abgeschlossen.}"
+  [ "$status" = "error" ] && msg="Backup ${HOSTNAME_CFG} fehlgeschlagen (Exit ${rc}). ${MESSAGES}"
+  log "=== Ende: ${status} (Exit ${rc}) ==="
+  emit_report "$status" "$rc" "$msg" || true
+  [ "$status" = "ok" ] || notify "$status" "$msg"
+  exit "$rc"
 }
+trap on_exit EXIT
 
-trap 'rc=$?; log "FEHLER in Zeile $LINENO (Exit $rc)"; notify "FEHLER" "Backup auf ${HOSTNAME} in Zeile $LINENO fehlgeschlagen (Exit $rc)."; report "error" "${rc}" "Backup in Zeile ${LINENO} fehlgeschlagen (Exit ${rc})"; exit ${rc}' ERR
-
-log "=== Start Backup ${HOSTNAME} (Host-ID ${HOST_ID}) ==="
-
-### --- Zielverzeichnis (optional versioniert) -------------------------------
-if [ "${ENABLE_VERSIONING}" = "true" ]; then
-  RUN_DEST="${BACKUP_DEST}/${TIMESTAMP}"
-  mkdir -p "${RUN_DEST}"
-else
-  RUN_DEST="${BACKUP_DEST}/current"
-  mkdir -p "${RUN_DEST}"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+if command -v flock >/dev/null 2>&1 && [ -d "$STATE_DIR" ]; then
+  exec 9>"${STATE_DIR}/lock"
+  if ! flock -n 9; then
+    trap - EXIT
+    log "Ein Lauf ist bereits aktiv - Abbruch ohne Meldung."
+    exit 0
+  fi
 fi
 
+auto_update() {
+  [ "$AUTO_UPDATE" = "true" ] || return 0
+  local tmp
+  tmp="$(mktemp "${STATE_DIR}/update.XXXXXX")" || return 0
+  if curl -fsS -m 30 -H "X-Host-Token: ${HOST_TOKEN}" "${ORCH_URL}/script/${HOST_ID}" -o "$tmp" 2>/dev/null \
+     && bash -n "$tmp" 2>/dev/null && ! cmp -s "$tmp" "$SCRIPT_PATH"; then
+    chmod 700 "$tmp" && mv -f "$tmp" "$SCRIPT_PATH" && log "Script aktualisiert (gilt ab dem naechsten Lauf)."
+  else
+    rm -f "$tmp"
+  fi
+}
+
+check_nas() {
+  local p="$NAS_BASE_PATH" target fstype ok t
+  while [ ! -e "$p" ] && [ "$p" != "/" ]; do p="$(dirname "$p")"; done
+  if [ "$REQUIRE_NAS_MOUNT" = "true" ]; then
+    command -v findmnt >/dev/null 2>&1 || fatal "findmnt fehlt - NAS-Mount nicht pruefbar"
+    target="$(findmnt -n -o TARGET -T "$p" 2>/dev/null)"
+    if [ -z "$target" ] || [ "$target" = "/" ]; then
+      fatal "Kein NAS-Mount unter ${NAS_BASE_PATH} (liegt auf dem lokalen Root-Dateisystem)"
+    fi
+    if [ -n "$NAS_FSTYPES" ]; then
+      fstype="$(findmnt -n -o FSTYPE -T "$p" 2>/dev/null)"
+      ok=false
+      for t in $NAS_FSTYPES; do [ "$t" = "$fstype" ] && ok=true; done
+      [ "$ok" = "true" ] || fatal "Dateisystemtyp '${fstype}' unter ${NAS_BASE_PATH} nicht erlaubt (${NAS_FSTYPES})"
+    fi
+  fi
+  mkdir -p "$BACKUP_DEST" || fatal "Zielverzeichnis ${BACKUP_DEST} nicht anlegbar"
+  t="${BACKUP_DEST}/.hai-write-test.$$"
+  if ! ( : > "$t" ) 2>/dev/null; then fatal "Ziel ${BACKUP_DEST} nicht beschreibbar"; fi
+  rm -f "$t"
+}
+
+backup_container() {
+  local name="$1" tag out p dest i=0
+  shift
+  if ! docker inspect "$name" >/dev/null 2>&1; then
+    note_warn "Container ${name} nicht gefunden - uebersprungen"
+    return 0
+  fi
+  log "Sichere Container ${name}"
+  tag="hai-backup-tmp:${name}-${TIMESTAMP}"
+  out="${RUN_DEST}/${name}_image_${TIMESTAMP}.tar.gz"
+  if docker commit "$name" "$tag" >/dev/null 2>&1 && docker save "$tag" | gzip > "$out"; then
+    :
+  else
+    note_fail "Image-Sicherung ${name} fehlgeschlagen"
+    rm -f "$out"
+  fi
+  docker rmi "$tag" >/dev/null 2>&1 || true
+  for p in "$@"; do
+    i=$((i + 1))
+    if [ "$i" -eq 1 ]; then dest="${RUN_DEST}/${name}_data"; else dest="${RUN_DEST}/${name}_data_${i}"; fi
+    if [ ! -d "$p" ]; then note_fail "Datenpfad ${p} (${name}) existiert nicht"; continue; fi
+    mkdir -p "$dest"
+    if rsync -a --delete -- "${p}/" "${dest}/"; then
+      echo "$(basename "$dest") <- ${p}" >> "${RUN_DEST}/paths_map.txt"
+    else
+      note_fail "rsync ${p} (${name}) fehlgeschlagen"
+    fi
+  done
+}
+
+backup_db() {
+  local name="$1" user="$2" out
+  if ! docker inspect "$name" >/dev/null 2>&1; then
+    note_warn "DB-Container ${name} nicht gefunden - Dump uebersprungen"
+    return 0
+  fi
+  log "Erzeuge DB-Dump fuer ${name}"
+  out="${RUN_DEST}/${name}_dump_${TIMESTAMP}.sql.gz"
+  if ! docker exec "$name" pg_dumpall -U "$user" | gzip > "$out"; then
+    note_fail "DB-Dump ${name} fehlgeschlagen"
+    rm -f "$out"
+  fi
+}
+
+backup_main() {
+  log "=== Start Backup ${HOSTNAME_CFG} (Host-ID ${HOST_ID}, Lauf ${RUN_ID}) ==="
+  emit_report running 0 "Lauf gestartet" || true
+  auto_update
+  command -v docker >/dev/null 2>&1 || fatal "docker nicht gefunden"
+  command -v rsync >/dev/null 2>&1 || fatal "rsync nicht gefunden"
+  check_nas
+  if [ "$ENABLE_VERSIONING" = "true" ]; then RUN_DEST="${BACKUP_DEST}/${TIMESTAMP}"; else RUN_DEST="${BACKUP_DEST}/current"; fi
+  mkdir -p "$RUN_DEST" || fatal "Laufverzeichnis ${RUN_DEST} nicht anlegbar"
+  : > "${RUN_DEST}/paths_map.txt"
 {% for c in containers %}
-### --- Container: {{ c.name }} ----------------------------------------------
-log "Sichere Container {{ c.name }} (Image + Volume)"
+  backup_container {{ c.name|shq }}{% for p in c.paths %} {{ p|shq }}{% endfor %}
 
-if docker inspect "{{ c.name }}" >/dev/null 2>&1; then
-  IMAGE_TAG="{{ c.name }}_backup:${TIMESTAMP}"
-  docker commit "{{ c.name }}" "${IMAGE_TAG}" >/dev/null
-  docker save "${IMAGE_TAG}" | gzip > "${RUN_DEST}/{{ c.name }}_image_${TIMESTAMP}.tar.gz"
-  docker rmi "${IMAGE_TAG}" >/dev/null || true
-else
-  log "WARNUNG: Container {{ c.name }} nicht gefunden - Image-Sicherung uebersprungen"
-fi
-
-{% if c.volume_source_path %}
-mkdir -p "${RUN_DEST}/{{ c.name }}_data"
-rsync -a --delete "{{ c.volume_source_path }}/" "${RUN_DEST}/{{ c.name }}_data/"
-{% endif %}
 {% endfor %}
-
-{% for db in db_containers %}
-### --- Datenbank-Dump: {{ db.name }} ----------------------------------------
-log "Erzeuge DB-Dump fuer {{ db.name }}"
-if docker inspect "{{ db.name }}" >/dev/null 2>&1; then
-  docker exec "{{ db.name }}" pg_dumpall -U "{{ db.db_user }}" \
-    > "${RUN_DEST}/{{ db.name }}_dump_${TIMESTAMP}.sql"
-  gzip -f "${RUN_DEST}/{{ db.name }}_dump_${TIMESTAMP}.sql"
-else
-  log "WARNUNG: DB-Container {{ db.name }} nicht gefunden - Dump uebersprungen"
-fi
+{% for d in db_containers %}
+  backup_db {{ d.name|shq }} {{ d.db_user|shq }}
 {% endfor %}
+  log "Sichere Crontab"
+  crontab -l > "${RUN_DEST}/my_crontab_${HOST_ID}.backup" 2>/dev/null || log "Hinweis: keine Crontab fuer diesen Benutzer"
+  if [ "$ENABLE_VERSIONING" = "true" ]; then
+    log "Bereinige alte Versionen (behalte ${VERSION_KEEP_COUNT})"
+    ( cd "$BACKUP_DEST" && ls -1dt ./*/ 2>/dev/null | tail -n +$((VERSION_KEEP_COUNT + 1)) | xargs -r rm -rf -- ) || note_warn "Versionsbereinigung fehlgeschlagen"
+  fi
+  return 0
+}
 
-### --- Crontab-Backup --------------------------------------------------------
-log "Sichere Crontab"
-crontab -l > "${RUN_DEST}/my_crontab_${HOST_ID}.backup" 2>/dev/null || \
-  log "Hinweis: keine Crontab fuer aktuellen User vorhanden"
-
-### --- Versionierung: alte Staende aufraeumen --------------------------------
-if [ "${ENABLE_VERSIONING}" = "true" ]; then
-  log "Bereinige alte Versionen (behalte ${VERSION_KEEP_COUNT})"
-  cd "${BACKUP_DEST}"
-  ls -1dt */ 2>/dev/null | tail -n +$((VERSION_KEEP_COUNT + 1)) | xargs -r rm -rf --
-fi
-
-log "=== Backup ${HOSTNAME} erfolgreich abgeschlossen ==="
-notify "OK" "Backup auf ${HOSTNAME} (Host-ID ${HOST_ID}) erfolgreich abgeschlossen."
-report "ok" "0" "Backup ${HOSTNAME} erfolgreich abgeschlossen."
+backup_main
+exit $?
