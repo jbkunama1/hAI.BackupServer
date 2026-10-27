@@ -15,9 +15,12 @@ services:
       - CRON_SCHEDULE=${CRON_SCHEDULE:-0 3 * * *}
       - BASIC_AUTH_USER=${BASIC_AUTH_USER:-admin}
       - BASIC_AUTH_PASSWORD=${BASIC_AUTH_PASSWORD:?BASIC_AUTH_PASSWORD muss in .env gesetzt sein}
+      # Leer = Enrollment deaktiviert (fail-closed)
+      - ENROLL_TOKEN=${ENROLL_TOKEN:-}
     volumes:
-      - ./app/config:/app/config          # hosts.yml + reports.json leben hier, bleiben beim Rebuild erhalten
-      - generated_scripts:/app/generated  # generierte Host-Scripte
+      # hosts.yml + backupserver.db (SQLite) leben hier und bleiben bei Redeploys erhalten
+      - ./app/config:/app/config
+      - generated_scripts:/app/generated
 
   backup-mcp:
     image: ghcr.io/jbkunama1/hai.backupserver-mcp:latest
@@ -34,6 +37,29 @@ services:
       - BACKUP_API_BASE_URL=http://backup-orchestrator:8080
       - BACKUP_API_USER=${BASIC_AUTH_USER:-admin}
       - BACKUP_API_PASSWORD=${BASIC_AUTH_PASSWORD:?BASIC_AUTH_PASSWORD muss in .env gesetzt sein}
+
+  # Optional: nur mit Profil "telegram" (COMPOSE_PROFILES=telegram bzw. --profile telegram)
+  backup-telegram:
+    image: ghcr.io/jbkunama1/hai.backupserver-telegram:latest
+    container_name: backup-telegram
+    profiles: ["telegram"]
+    restart: unless-stopped
+    depends_on:
+      - backup-orchestrator
+    networks:
+      - highfishNetwork
+    environment:
+      - TZ=Europe/Berlin
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_ALLOWED_USER_IDS=${TELEGRAM_ALLOWED_USER_IDS:-}
+      - DIGEST_TIME=${DIGEST_TIME:-08:00}
+      - DIGEST_TZ=${DIGEST_TZ:-Europe/Berlin}
+      - BACKUP_API_BASE_URL=http://backup-orchestrator:8080
+      - BACKUP_API_USER=${BASIC_AUTH_USER:-admin}
+      - BACKUP_API_PASSWORD=${BASIC_AUTH_PASSWORD:?BASIC_AUTH_PASSWORD muss in .env gesetzt sein}
+      - WEB_BASE_URL=http://${ORCHESTRATOR_HOST:-192.168.178.26}:8080
+    volumes:
+      - telegram_data:/data
 
   filebrowser:
     image: filebrowser/filebrowser:latest
@@ -54,6 +80,7 @@ services:
 
 volumes:
   generated_scripts:
+  telegram_data:
   filebrowser_config:
   filebrowser_db:
 

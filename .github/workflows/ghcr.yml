@@ -10,7 +10,21 @@ permissions:
   packages: write
 
 jobs:
+  # Gate: Images werden nur veroeffentlicht, wenn alle Tests (inkl. HTTP-API-Tests) bestehen.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Abhaengigkeiten installieren
+        run: pip install -r requirements.txt -r telegram_bot/requirements.txt pytest httpx
+      - name: Tests
+        run: python -m pytest -q
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -22,6 +36,9 @@ jobs:
           - component: mcp
             context: ./mcp_server
             dockerfile: mcp_server/Dockerfile
+          - component: telegram
+            context: ./telegram_bot
+            dockerfile: telegram_bot/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - name: Resolve lowercase image name

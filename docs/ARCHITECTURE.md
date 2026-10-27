@@ -2,63 +2,47 @@
 
 ## Ziel
 
-Zentrales Backup-Control-Center auf **192.168.178.26** (dort liegt auch das
-SMB-Share `highfishNAS25`), das:
-
-1. pro Host automatisch ein `full_backup_<HOST_ID>.sh` generiert (Basis:
-   [hAI.FullBackupScript](https://github.com/jbkunama1/hAI.FullBackupScript)),
-2. eine Weboberflaeche zur Hostverwaltung bereitstellt (geschuetzt per
-   HTTP Basic Auth),
-3. eine REST-API fuer Hosts/Agenten/MCP bereitstellt (ebenfalls per Basic
-   Auth geschuetzt),
-4. einen eigenen MCP-Server (`mcp_server/`) bereitstellt, der diese API als
-   MCP-Tools kapselt,
-5. optional per Filebrowser das SMB-Share im Browser verwaltbar macht.
+Zentrales Backup-Control-Center: Der Orchestrator verwaltet Hosts, erzeugt pro Host ein Backup-Script
+(Basis: [hAI.FullBackupScript](https://github.com/jbkunama1/hAI.FullBackupScript)) und sammelt Ergebnis-Reports.
+Die Sicherung selbst läuft **auf dem jeweiligen Host** und schreibt auf ein dort gemountetes NAS.
 
 ## Komponenten
 
-| Komponente            | Container            | Zweck                                             |
-|------------------------|----------------------|----------------------------------------------------|
-| backup-orchestrator     | `backup-orchestrator` | Web-UI, Template-Engine, Script-/Bootstrap-API, JSON-API (Basic Auth) |
-| backup-mcp              | `backup-mcp`          | MCP-Server (SSE), kapselt die JSON-API als Tools fuer Agenten |
-| filebrowser (optional)  | `filebrowser`         | Web-Dateimanager fuer `/mnt/highfishNAS25/Sicherung` |
+| Komponente | Container | Zweck |
+|---|---|---|
+| backup-orchestrator | `backup-orchestrator` | Web-UI mit Adminmenü, Script-/Bootstrap-/Enroll-Auslieferung, Admin-API, Report-Annahme (SQLite) |
+| backup-mcp | `backup-mcp` | MCP-Server (SSE), kapselt die Admin-API als Tools |
+| backup-telegram (optional) | `backup-telegram` | Admin-Bot (Long-Polling), Sofort-Fehlermeldungen, Tagesdigest |
+| filebrowser (optional) | `filebrowser` | Web-Dateimanager für das Backup-Ziel |
 
-## Datenfluss
+## Zugriffsmodell (drei getrennte Berechtigungen)
 
-1. Admin pflegt Hosts in der Web-UI (`hosts.yml`) -- Login per Basic Auth
-   (`BASIC_AUTH_USER`/`BASIC_AUTH_PASSWORD`).
-2. Beim Speichern wird sofort `full_backup_<HOST_ID>.sh` in `/app/generated` erzeugt.
-3. Neuer/bestehender Host ruft `GET /bootstrap/{host_id}` (mit `-u user:pass`)
-   ab (einmalig) bzw. `GET /script/{host_id}` (bei jedem Cron-Lauf optional
-   erneut, falls sich die Konfiguration geaendert hat -- siehe `docs/ROLLOUT.md`).
-4. Backup laeuft lokal auf dem Host, schreibt via `rsync`/`docker save` auf das
-   SMB-Share.
-5. Agenten/MCP-Clients rufen den `backup-mcp`-Server (SSE, Port 8090) auf,
-   der intern per Basic Auth mit `backup-orchestrator` spricht.
-6. Filebrowser zeigt den Inhalt des Shares im Browser.
+| Berechtigung | Mittel | Darf |
+|---|---|---|
+| Admin | HTTP Basic Auth | Web-UI, Verwaltungs-API, Bootstrap-Download |
+| Host | Header `X-Host-Token` (pro Host) | Nur eigenes Script abrufen und eigene Reports senden |
+| Enrollment | Header `X-Enroll-Token` | Nur `POST /api/enroll`; ohne `ENROLL_TOKEN` deaktiviert (fail-closed) |
 
-## Sicherheit (Basic Auth)
+Clients erhalten **nie** das Admin-Passwort. Alte, bereits installierte Scripte mit Admin-Zugang funktionieren weiter,
+sollten aber per erneutem Bootstrap/Enroll auf Host-Token umgestellt werden.
 
-- **Alle** Endpunkte von `backup-orchestrator` (Web-UI, `/script/*`,
-  `/bootstrap/*`, `/api/*`) sind per HTTP Basic Auth geschuetzt
-  (`BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD`, gesetzt via `.env`).
-- Der Server startet **fail-closed**: ist `BASIC_AUTH_PASSWORD` nicht gesetzt,
-  antwortet jeder Request mit HTTP 500 statt ungeschuetzt zu laufen.
-- Generierte Bootstrap-Scripte enthalten das Passwort im Klartext (fuer den
-  automatischen `curl`-Aufruf noetig) -- daher nur ueber vertrauenswuerdige
-  Kanaele im LAN abrufen/aufbewahren, nicht oeffentlich posten.
-- `backup-mcp` verwendet dieselben Zugangsdaten intern, um mit
-  `backup-orchestrator` zu sprechen (Container-zu-Container, nicht extern
-  exponiert).
-- `hosts.yml` enthaelt selbst keine Zugangsdaten, nur Struktur-/Pfadinformationen.
-- Fuer eine externe Erreichbarkeit (z.B. via Cloudflare Tunnel) zusaetzlich
-  Cloudflare Access oder ein IP-Allowlist vorschalten -- Basic Auth allein
-  ersetzt keine TLS-Terminierung; im LAN ist das Risiko gering, extern sollte
-  zusaetzlich HTTPS erzwungen werden.
+## Datenhaltung
 
-## Erweiterungsideen
+- `app/config/hosts.yml` – Konfiguration (inkl. Host-Tokens, Klartext; Datei nur für Administratoren lesbar halten). Atomares Schreiben, Sperre gegen parallele Änderungen.
+- `app/config/backupserver.db` – SQLite (WAL): Läufe, Fehler-Ereignisse, Audit-Log. Transaktional, parallelsicher.
+- Alte `reports.json` wird beim Start einmalig importiert; die Datei bleibt unverändert als Rückfallebene.
+- Bot-Zustand (Cursor, Digest-Datum, Dedup) liegt separat im Volume `telegram_data`.
 
-- Monitoring-Erweiterung: Hosts melden nach dem Lauf per `curl -X POST
-  /api/hosts/{id}/report` Status/Logfile, Dashboard zeigt letzten Lauf +
-  Erfolg/Fehler an.
-- Rate-Limiting/Lockout fuer wiederholte Basic-Auth-Fehlversuche.
+## Ablauf eines Backups
+
+1. Cron startet `full_backup_<ID>.sh` auf dem Host; lokaler Lock verhindert Überlappung.
+2. Script meldet `running`, prüft Docker/rsync und den NAS-Mount (kein Fallback auf lokale Platte), sichert Container, Datenpfade, DB-Dumps.
+3. Beim Beenden (auch bei Abbruch) sendet ein EXIT-Trap `ok`, `warning` oder `error` mit unverändertem Exit-Code. Nicht zustellbare Reports bleiben in einem lokalen Spool und werden beim nächsten Lauf nachgereicht.
+4. Der Orchestrator speichert den Lauf (idempotent über `run_id`) und legt bei Fehlern genau ein Ereignis an. Der Bot holt Ereignisse ab und sendet sie sofort.
+
+## Sicherheitshinweise
+
+- Basic Auth und Host-Tokens laufen über HTTP; im LAN vertretbar, extern HTTPS/VPN vorschalten.
+- Web-Formulare sind CSRF-geschützt; mutierende JSON-Endpunkte erwarten `X-Requested-With`.
+- Alle Hostnamen, Container, Pfade und Report-Felder werden validiert; Scripte quoten Werte per `shlex.quote`.
+- Der Bot hat Default-Deny: nur erlaubte Nutzer-IDs im Privatchat, für Befehle **und** Buttons.

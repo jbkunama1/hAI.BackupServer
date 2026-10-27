@@ -1,7 +1,8 @@
 # Zentrale Host-Konfiguration fuer hAI.BackupServer
-# Kopieren nach hosts.yml und an die eigene Umgebung anpassen.
+# Wird beim ersten Start nach hosts.yml kopiert. Hosts koennen auch per Web-UI oder
+# per Enroll-Script angelegt werden; host_token, fingerprint und created_at setzt der Server selbst.
 
-nas_mount_default: "highfishNAS25"     # Basisname des SMB-Shares
+nas_mount_default: "highfishNAS25"     # Bezeichnung des SMB-Shares
 nas_base_path: "/mnt/highfishNAS25/Sicherung"
 
 notifications:
@@ -15,19 +16,26 @@ versioning:
   enabled: false
   keep_count: 5
 
+monitoring:
+  expected_interval_hours: 24   # erwarteter Abstand zwischen Laeufen
+  grace_hours: 4                # Karenz bis "ueberfaellig"
+  enroll_grace_hours: 30        # Frist fuer die erste Meldung neuer Hosts
+  max_run_hours: 12             # laenger "laeuft" = "unklar"
+  history_limit: 200            # Laeufe pro Host
+  require_nas_mount: true       # Client bricht ab, wenn der Zielpfad kein Mount ist
+  nas_fstypes: ""               # z. B. "cifs nfs4"; leer = jedes Dateisystem ausser "/"
+
 hosts:
   - host_name: "highfish5"
     host_id: "5"
     nas_mount: "highfishNAS25"
     containers:
       - name: "bierkaessle_bot"
-        volume_source_path: "/mnt/dietpi_userdata/docker-data/volumes/bierkaessle_bot_data/_data"
-      - name: "bierkaessle_web"
-        volume_source_path: "/mnt/dietpi_userdata/docker-data/volumes/bierkaessle_web_data/_data"
+        volume_paths:           # mehrere Datenpfade je Container moeglich
+          - "/mnt/dietpi_userdata/docker-data/volumes/bierkaessle_bot_data/_data"
       - name: "homeassistant"
-        volume_source_path: "/mnt/dietpi_userdata/docker-data/volumes/homeassistant_config/_data"
-      - name: "deconz_Conbee"
-        volume_source_path: "/mnt/dietpi_userdata/docker-data/volumes/deconz_data/_data"
+        volume_paths:
+          - "/mnt/dietpi_userdata/docker-data/volumes/homeassistant_config/_data"
     db_containers: []
 
   - host_name: "highfish10"
@@ -35,7 +43,8 @@ hosts:
     nas_mount: "highfishNAS25"
     containers:
       - name: "matchtreff_padel_web"
-        volume_source_path: "/mnt/dietpi_userdata/docker-data/volumes/matchtreff_padel_web_data/_data"
+        volume_paths:
+          - "/mnt/dietpi_userdata/docker-data/volumes/matchtreff_padel_web_data/_data"
     db_containers:
       - name: "hai_anythingmcp_postgres"
         db_user: "postgres"
