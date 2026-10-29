@@ -27,9 +27,11 @@ def render_backup_script(host: HostConfig, cfg: dict, orchestrator_host: str) ->
     v.path(cfg.get("nas_base_path", "/mnt/highfishNAS25/Sicherung"))
     mon = monitoring(cfg)
     notif, vers = cfg.get("notifications", {}), cfg.get("versioning", {})
+    backup_dir = f"{host.backup_dir_name}/{host.host_name}"
     return _env.get_template("full_backup_template.sh.j2").render(
         host_name=host.host_name, host_id=host.host_id, nas_mount=host.nas_mount,
         nas_base_path=cfg.get("nas_base_path", "/mnt/highfishNAS25/Sicherung"),
+        backup_dir_name=host.backup_dir_name,
         require_nas_mount=bool(mon["require_nas_mount"]),
         nas_fstypes=v.fstypes(mon["nas_fstypes"]),
         containers=[{"name": c.name, "paths": c.all_paths()} for c in host.containers],

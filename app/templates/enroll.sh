@@ -9,6 +9,7 @@ set -euo pipefail
 ORCH_URL=@@ORCH_URL@@
 TARGET_DIR="${HAI_TARGET_DIR:-/opt/backup}"
 CRON_DIR="${HAI_CRON_DIR:-/etc/cron.d}"
+BACKUP_DIR_NAME="${HAI_BACKUP_DIR_NAME:-}"
 
 usage() {
   cat <<'EOF'
@@ -18,6 +19,7 @@ Verwendung: sudo ./enroll.sh [Optionen]
   --dry-run           Nur erkennen und anzeigen, nichts senden/installieren
   --yes, -y           Alle Rueckfragen mit Standardwerten beantworten
   --host-name NAME    Hostname statt "hostname -s" verwenden
+  --backup-dir NAME    Backup-Verzeichnisname (Standard: Server)
   --update-config     Bei erneutem Enroll die Container-Konfiguration auf dem Server ueberschreiben
   --run-now           Nach der Installation sofort einen Backup-Lauf starten
 
@@ -28,7 +30,7 @@ Das Script richtet KEINEN NAS-Mount ein - der Zielpfad muss bereits gemountet se
 EOF
 }
 
-YES=false; DRY=false; RUN_NOW=false; UPDATE_CFG=false; HOST_NAME_ARG=""
+YES=false; DRY=false; RUN_NOW=false; UPDATE_CFG=false; HOST_NAME_ARG=""; BACKUP_DIR_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
@@ -37,6 +39,7 @@ while [ $# -gt 0 ]; do
     --run-now) RUN_NOW=true ;;
     --update-config) UPDATE_CFG=true ;;
     --host-name) HOST_NAME_ARG="${2:-}"; shift ;;
+    --backup-dir) BACKUP_DIR_ARG="${2:-}"; shift ;;
     *) echo "Unbekannte Option: $1" >&2; usage >&2; exit 2 ;;
   esac
   shift
@@ -92,7 +95,8 @@ while IFS= read -r name; do
   fi
 done < <(docker ps -a --format '{{.Names}}')
 
-PAYLOAD="{\"host_name\":\"$(json_escape "$HOST_NAME")\",\"fingerprint\":\"${FPR}\",\"update_config\":${UPDATE_CFG},\"containers\":[${CJSON}],\"db_containers\":[${DJSON}]}"
+BACKUP_DIR_NAME="${BACKUP_DIR_ARG:-$( [ "$YES" = "true" ] && echo "Server" || ask "Backup-Verzeichnisname" Server && echo "$REPLY" || echo "Server" )}"
+PAYLOAD="{\"host_name\":\"$(json_escape "$HOST_NAME")\",\"fingerprint\":\"${FPR}\",\"update_config\":${UPDATE_CFG},\"backup_dir_name\":\"$(json_escape "$BACKUP_DIR_NAME")\",\"containers\":[${CJSON}],\"db_containers\":[${DJSON}]}"
 if [ "$DRY" = "true" ]; then
   echo "== Trockenlauf - wuerde senden an ${ORCH_URL}/api/enroll =="; echo "$PAYLOAD"; exit 0
 fi
