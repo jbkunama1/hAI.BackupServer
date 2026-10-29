@@ -137,6 +137,7 @@ class Service:
     def enroll(self, payload: dict, update_config: bool = False) -> dict:
         fpr = v.fingerprint(str(payload.get("fingerprint", "")))
         name = v.host_name(str(payload.get("host_name", "")))
+        backup_dir_name = v.label(str(payload.get("backup_dir_name", "Server")))
         containers, rejected = [], []
         for c in payload.get("containers") or []:
             try:
@@ -171,8 +172,8 @@ class Service:
                 hid = f"{base[:28]}-{n}"
                 n += 1
             token = secrets.token_urlsafe(24)
-            host = HostConfig(host_name=name, host_id=hid, nas_mount=mon_nas, containers=containers,
-                              db_containers=dbs, host_token=token, fingerprint=fpr, created_at=now_iso())
+            host = HostConfig(host_name=name, host_id=hid, nas_mount=mon_nas, backup_dir_name=backup_dir_name,
+                              containers=containers, db_containers=dbs, host_token=token, fingerprint=fpr, created_at=now_iso())
             hosts.append(host.validate().to_dict())
             return hid, token, True, True
         hid, token, created, changed = self.config.update(fn)
