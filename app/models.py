@@ -52,7 +52,7 @@ class HostConfig:
     host_name: str
     host_id: str
     nas_mount: str
-    backup_dir_name: str = "Server"
+    backup_dir_name: str = v.DEFAULT_BACKUP_DIR
     containers: List[ContainerConfig] = field(default_factory=list)
     db_containers: List[DbContainerConfig] = field(default_factory=list)
     host_token: str = ""
@@ -67,6 +67,7 @@ class HostConfig:
             "host_name": self.host_name,
             "host_id": self.host_id,
             "nas_mount": self.nas_mount,
+            "backup_dir_name": self.backup_dir_name,
             "containers": [c.to_dict() for c in self.containers],
             "db_containers": [{"name": d.name, "db_user": d.db_user} for d in self.db_containers],
             "host_token": self.host_token,
@@ -89,29 +90,29 @@ class HostConfig:
             host_name=data["host_name"],
             host_id=str(data["host_id"]),
             nas_mount=data.get("nas_mount", "highfishNAS25"),
-                backup_dir_name=data.get("backup_dir_name", "Server"),
-                containers=[ContainerConfig.from_dict(c) for c in data.get("containers") or []],
-                db_containers=[DbContainerConfig.from_dict(d) for d in data.get("db_containers") or []],
-                host_token=data.get("host_token") or "",
-                fingerprint=data.get("fingerprint") or "",
-                created_at=data.get("created_at") or "",
-                expected_interval_hours=data.get("expected_interval_hours"),
-                monitoring_paused=bool(data.get("monitoring_paused", False)),
-                auto_update=bool(data.get("auto_update", False)),
-            )
+            backup_dir_name=str(data.get("backup_dir_name") or v.DEFAULT_BACKUP_DIR),
+            containers=[ContainerConfig.from_dict(c) for c in data.get("containers") or []],
+            db_containers=[DbContainerConfig.from_dict(d) for d in data.get("db_containers") or []],
+            host_token=data.get("host_token") or "",
+            fingerprint=data.get("fingerprint") or "",
+            created_at=data.get("created_at") or "",
+            expected_interval_hours=data.get("expected_interval_hours"),
+            monitoring_paused=bool(data.get("monitoring_paused", False)),
+            auto_update=bool(data.get("auto_update", False)),
+        )
 
     def validate(self) -> "HostConfig":
         v.host_id(self.host_id)
         v.host_name(self.host_name)
         v.label(self.nas_mount)
-                v.label(self.backup_dir_name)
-            for c in self.containers:
-                v.container_name(c.name)
-                c.volume_source_path = v.path(c.volume_source_path) if c.volume_source_path else None
-                c.volume_paths = [v.path(p) for p in c.volume_paths]
-            for d in self.db_containers:
-                v.container_name(d.name)
-                v.db_user(d.db_user)
-            if self.expected_interval_hours is not None:
-                v.number(self.expected_interval_hours, "Erwartetes Intervall (h)", 1, 24 * 31)
-            return self
+        v.dir_name(self.backup_dir_name)
+        for c in self.containers:
+            v.container_name(c.name)
+            c.volume_source_path = v.path(c.volume_source_path) if c.volume_source_path else None
+            c.volume_paths = [v.path(p) for p in c.volume_paths]
+        for d in self.db_containers:
+            v.container_name(d.name)
+            v.db_user(d.db_user)
+        if self.expected_interval_hours is not None:
+            v.number(self.expected_interval_hours, "Erwartetes Intervall (h)", 1, 24 * 31)
+        return self
