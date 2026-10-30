@@ -194,6 +194,72 @@ backup_container() {
   done
 }
 
+backup_home() {
+  log "Sichere /home Verzeichnis"
+  if [ -d "/home" ]; then
+    home_dest="${RUN_DEST}/home_backup_${TIMESTAMP}"
+    mkdir -p "$home_dest"
+    log "  /home existiert -> sichere nach ${home_dest}"
+    echo "/home -> /home" >> "${RUN_DEST}/paths_map.txt"
+  else
+    log "  /home existiert nicht -> uebersprungen"
+  fi
+}
+
+check_custom_backup_script() {
+  local script_path="/home/Scripts/full_backup.sh"
+  if [ -f "$script_path" ]; then
+    log "  Benutzerdefiniertes Backup-Script gefunden: ${script_path}"
+    log "  Inhalt zur Pruefung:"
+    echo ""
+    head -n 20 "$script_path" | sed 's/^/    /'
+    if [ "$YES" = "true" ]; then
+      log "  /home/Scripts/full_backup.sh wird gesichert (Dry-Run: nein)"
+      return 0
+    else
+      local a
+      read -r -p "  Sollen die Ausgaben von /home/Scripts/full_backup.sh sichergestellt werden? (j/N) " a || true
+      case "${a:-}" in [jJyY]*) return 0 ;; *) return 1 ;; esac
+    fi
+  else
+    log "  Kein benutzerdefiniertes Backup-Script gefunden"
+    return 1
+  fi
+}
+
+backup_home() {
+  log "Sichere /home Verzeichnis"
+  if [ -d "/home" ]; then
+    home_dest="${RUN_DEST}/home_backup_${TIMESTAMP}"
+    mkdir -p "$home_dest"
+    log "  /home existiert -> sichere nach ${home_dest}"
+    echo "/home -> /home" >> "${RUN_DEST}/paths_map.txt"
+  else
+    log "  /home existiert nicht -> uebersprungen"
+  fi
+}
+
+check_custom_backup_script() {
+  local script_path="/home/Scripts/full_backup.sh"
+  if [ -f "$script_path" ]; then
+    log "  Benutzerdefiniertes Backup-Script gefunden: ${script_path}"
+    log "  Inhalt zur Pruefung:"
+    echo ""
+    head -n 20 "$script_path" | sed 's/^/    /'
+    if [ "$YES" = "true" ]; then
+      log "  /home/Scripts/full_backup.sh wird gesichert (Dry-Run: nein)"
+      return 0
+    else
+      local a
+      read -r -p "  Sollen die Ausgaben von /home/Scripts/full_backup.sh sichergestellt werden? (j/N) " a || true
+      case "${a:-}" in [jJyY]*) return 0 ;; *) return 1 ;; esac
+    fi
+  else
+    log "  Kein benutzerdefiniertes Backup-Script gefunden"
+    return 1
+  fi
+}
+
 backup_db() {
   local name="$1" user="$2" out
   if ! docker inspect "$name" >/dev/null 2>&1; then
@@ -208,6 +274,39 @@ backup_db() {
   fi
 }
 
+backup_home() {
+  log "Sichere /home Verzeichnis"
+  if [ -d "/home" ]; then
+    home_dest="${RUN_DEST}/home_backup_${TIMESTAMP}"
+    mkdir -p "$home_dest"
+    log "  /home existiert -> sichere nach ${home_dest}"
+    echo "/home -> /home" >> "${RUN_DEST}/paths_map.txt"
+  else
+    log "  /home existiert nicht -> uebersprungen"
+  fi
+}
+
+check_custom_backup_script() {
+  local script_path="/home/Scripts/full_backup.sh"
+  if [ -f "$script_path" ]; then
+    log "  Benutzerdefiniertes Backup-Script gefunden: ${script_path}"
+    log "  Inhalt zur Pruefung:"
+    echo ""
+    head -n 20 "$script_path" | sed 's/^/    /'
+    if [ "$YES" = "true" ]; then
+      log "  /home/Scripts/full_backup.sh wird gesichert (Dry-Run: nein)"
+      return 0
+    else
+      local a
+      read -r -p "  Sollen die Ausgaben von /home/Scripts/full_backup.sh sichergestellt werden? (j/N) " a || true
+      case "${a:-}" in [jJyY]*) return 0 ;; *) return 1 ;; esac
+    fi
+  else
+    log "  Kein benutzerdefiniertes Backup-Script gefunden"
+    return 1
+  fi
+}
+
 backup_main() {
   log "=== Start Backup ${HOSTNAME_CFG} (Host-ID ${HOST_ID}, Lauf ${RUN_ID}) ==="
   emit_report running 0 "Lauf gestartet" || true
@@ -217,16 +316,22 @@ backup_main() {
   check_nas
   if [ "$ENABLE_VERSIONING" = "true" ]; then RUN_DEST="${BACKUP_DEST}/${TIMESTAMP}"; else RUN_DEST="${BACKUP_DEST}/current"; fi
   mkdir -p "$RUN_DEST" || fatal "Laufverzeichnis ${RUN_DEST} nicht anlegbar"
-  : > "${RUN_DEST}/paths_map.txt"
-{% for c in containers %}
-  backup_container {{ c.name|shq }}{% for p in c.paths %} {{ p|shq }}{% endfor %}
+    : > "${RUN_DEST}/paths_map.txt"
+    log "Sichere Basisverzeichnisse"
+    backup_home
+    check_custom_backup_script
+    log "Sichere Basisverzeichnisse"
+    backup_home
+    check_custom_backup_script
+  {% for c in containers %}
+    backup_container {{ c.name|shq }}{% for p in c.paths %} {{ p|shq }}{% endfor %}
 
 {% endfor %}
-{% for d in db_containers %}
-  backup_db {{ d.name|shq }} {{ d.db_user|shq }}
-{% endfor %}
-  log "Sichere Crontab"
-  crontab -l > "${RUN_DEST}/my_crontab_${HOST_ID}.backup" 2>/dev/null || log "Hinweis: keine Crontab fuer diesen Benutzer"
+  {% for d in db_containers %}
+    backup_db {{ d.name|shq }} {{ d.db_user|shq }}
+  {% endfor %}
+    log "Sichere Crontab"
+    crontab -l > "${RUN_DEST}/my_crontab_${HOST_ID}.backup" 2>/dev/null || log "Hinweis: keine Crontab fuer diesen Benutzer"
   if [ "$ENABLE_VERSIONING" = "true" ]; then
     log "Bereinige alte Versionen (behalte ${VERSION_KEEP_COUNT})"
     ( cd "$BACKUP_DEST" && ls -1dt ./*/ 2>/dev/null | tail -n +$((VERSION_KEEP_COUNT + 1)) | xargs -r rm -rf -- ) || note_warn "Versionsbereinigung fehlgeschlagen"
