@@ -167,7 +167,7 @@ def api_upsert_host(payload: dict, actor: str = Depends(require_admin)):
     host = HostConfig.from_dict(payload)
     existing = cs.find_host(svc.cfg(), host.host_id)
     if existing:                                   # nicht mitgeschickte Felder behalten (z. B. MCP-Upsert)
-        for key in ("expected_interval_hours", "auto_update"):
+        for key in ("expected_interval_hours", "auto_update", "backup_dir_name"):
             if key not in payload:
                 setattr(host, key, getattr(existing, key))
     return {"status": "ok", "host": svc.save_host(host, actor).public_dict()}
@@ -267,10 +267,11 @@ async def settings_save(request: Request, user: str = Depends(require_admin)):
     return RedirectResponse("/settings", status_code=303)
 
 
-def _host_from_form(form: dict, host_id: str) -> HostConfig:
+def _host_from_form(form: dict, host_id: str, default_dir: str = v.DEFAULT_BACKUP_DIR) -> HostConfig:
     return HostConfig(
         host_name=str(form.get("host_name", "")).strip(), host_id=host_id,
         nas_mount=str(form.get("nas_mount", "")).strip(),
+        backup_dir_name=str(form.get("backup_dir_name") or "").strip() or default_dir,
         containers=svc.parse_containers(str(form.get("containers_raw", ""))),
         db_containers=svc.parse_db_containers(str(form.get("db_containers_raw", ""))),
         expected_interval_hours=v.number(form.get("expected_interval_hours"), "Intervall", 1, 744, None),
@@ -312,8 +313,8 @@ def edit_host_form(request: Request, host_id: str, user: str = Depends(require_a
 async def update_host(request: Request, host_id: str, user: str = Depends(require_admin)):
     form = dict(await request.form())
     check_csrf(user, str(form.get("csrf", "")))
-    svc.host(host_id)
-    svc.save_host(_host_from_form(form, host_id), user)
+    existing = svc.host(host_id)      # fehlt das Feld im Formular, bleibt der bisherige Verzeichnisname
+    svc.save_host(_host_from_form(form, host_id, existing.backup_dir_name), user)
     return RedirectResponse(f"/hosts/{host_id}", status_code=303)
 
 
