@@ -66,11 +66,11 @@ class HostConfig:
     auto_update: bool = False
 
     def to_dict(self):
-        return {
-            "host_name": self.host_name,
-            "host_id": self.host_id,
-            "nas_mount": self.nas_mount,
-            "backup_dir_name": self.backup_dir_name,
+            return {
+                "host_name": self.host_name,
+                "host_id": self.host_id,
+                "nas_mount": self.nas_mount,
+                "backup_dir_name": self.backup_dir_name,
                 "samba_share_path": self.samba_share_path,
                 "samba_username": self.samba_username,
                 "samba_password": self.samba_password,
