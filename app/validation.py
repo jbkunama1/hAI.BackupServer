@@ -106,6 +106,27 @@ def number(v, label_, lo, hi, default=None):
         raise ValidationError(f"{label_} muss zwischen {lo} und {hi} liegen")
     return f
 
+def samba_share_path(v):
+    """Samba-Share-Pfad (z.B. //server/share/backup)"""
+    if not isinstance(v, str) or not v.startswith("//"):
+        raise ValidationError("Samba-Share muss mit // beginnen (z.B. //server/share/backup)")
+    if len(v) > 1024:
+        raise ValidationError("Samba-Share-Pfad zu lang")
+    return v
+
+def samba_username(v):
+    """Samba-Benutzername"""
+    if not isinstance(v, str) or len(v) == 0 or len(v) > 64:
+        raise ValidationError("Samba-Benutzername muss 1-64 Zeichen lang sein")
+    return v
+
+def samba_password(v):
+    """Samba-Passwort (leer wird erlaubt, da user es nicht angeben muss)"""
+    if not isinstance(v, str):
+        raise ValidationError("Samba-Passwort muss ein String sein")
+    if len(v) > 1024:
+        raise ValidationError("Samba-Passwort zu lang")
+    return v
 
 def slug(name):
     s = re.sub(r"[^a-z0-9_-]+", "-", str(name).lower()).strip("-")

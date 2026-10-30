@@ -40,6 +40,11 @@ WARNINGS=0
 MESSAGES=""
 RUN_DEST=""
 
+# Samba-Konfiguration
+SAMBA_SHARE="{{ samba_share_path|comment }}"
+SAMBA_USERNAME="{{ samba_username|comment }}"
+SAMBA_PASSWORD="{{ samba_password|comment }}"
+
 log() {
   local m
   m="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
@@ -69,6 +74,20 @@ send_spooled() {
       break
     fi
   done
+}
+
+# Samba-Hilfsfunktionen
+samba_backup() {
+  local source="$1" target="$2"
+  if [ -z "$SAMBA_SHARE" ] || [ -z "$SAMBA_USERNAME" ] || [ -z "$SAMBA_PASSWORD" ]; then
+    log "Samba-Share nicht konfiguriert - überspringe Backup von $source"
+    return 0
+  fi
+  log "Samba-Backup: $source -> $target"
+  echo "$SAMBA_PASSWORD" | smbclient "$SAMBA_SHARE" -U "$SAMBA_USERNAME%" --command "mkdir $target; prompt off; recurse on; source $source; mput *" 2>/dev/null || {
+    note_warn "Samba-Backup fehlgeschlagen für $source"
+    return 1
+  }
 }
 
 emit_report() {
@@ -206,6 +225,18 @@ backup_home() {
   fi
 }
 
+backup_home() {
+  log "Sichere /home Verzeichnis"
+  if [ -d "/home" ]; then
+    home_dest="${RUN_DEST}/home_backup_${TIMESTAMP}"
+    mkdir -p "$home_dest"
+    log "  /home existiert -> sichere nach ${home_dest}"
+    echo "/home -> /home" >> "${RUN_DEST}/paths_map.txt"
+  else
+    log "  /home existiert nicht -> uebersprungen"
+  fi
+}
+
 check_custom_backup_script() {
   local script_path="/home/Scripts/full_backup.sh"
   if [ -f "$script_path" ]; then
@@ -224,18 +255,6 @@ check_custom_backup_script() {
   else
     log "  Kein benutzerdefiniertes Backup-Script gefunden"
     return 1
-  fi
-}
-
-backup_home() {
-  log "Sichere /home Verzeichnis"
-  if [ -d "/home" ]; then
-    home_dest="${RUN_DEST}/home_backup_${TIMESTAMP}"
-    mkdir -p "$home_dest"
-    log "  /home existiert -> sichere nach ${home_dest}"
-    echo "/home -> /home" >> "${RUN_DEST}/paths_map.txt"
-  else
-    log "  /home existiert nicht -> uebersprungen"
   fi
 }
 
@@ -313,29 +332,33 @@ backup_main() {
   auto_update
   command -v docker >/dev/null 2>&1 || fatal "docker nicht gefunden"
   command -v rsync >/dev/null 2>&1 || fatal "rsync nicht gefunden"
+  command -v smbclient >/dev/null 2>&1 || log "Hinweis: smbclient nicht gefunden - Samba-Backup wird nicht unterstützt"
   check_nas
   if [ "$ENABLE_VERSIONING" = "true" ]; then RUN_DEST="${BACKUP_DEST}/${TIMESTAMP}"; else RUN_DEST="${BACKUP_DEST}/current"; fi
   mkdir -p "$RUN_DEST" || fatal "Laufverzeichnis ${RUN_DEST} nicht anlegbar"
-    : > "${RUN_DEST}/paths_map.txt"
-    log "Sichere Basisverzeichnisse"
-    backup_home
-    check_custom_backup_script
-    log "Sichere Basisverzeichnisse"
-    backup_home
-    check_custom_backup_script
+  : > "${RUN_DEST}/paths_map.txt"
+  
+  log "Sichere Basisverzeichnisse"
+  backup_home
+  check_custom_backup_script
+  
   {% for c in containers %}
-    backup_container {{ c.name|shq }}{% for p in c.paths %} {{ p|shq }}{% endfor %}
-
-{% endfor %}
-  {% for d in db_containers %}
-    backup_db {{ d.name|shq }} {{ d.db_user|shq }}
+  backup_container {{ c.name|shq }}{% for p in c.paths %} {{ p|shq }}{% endfor %}
   {% endfor %}
-    log "Sichere Crontab"
-    crontab -l > "${RUN_DEST}/my_crontab_${HOST_ID}.backup" 2>/dev/null || log "Hinweis: keine Crontab fuer diesen Benutzer"
+  
+  {% for d in db_containers %}
+  backup_db {{ d.name|shq }} {{ d.db_user|shq }}
+  {% endfor %}
+  
+  log "Sichere Crontab"
+  crontab -l > "${RUN_DEST}/my_crontab_${HOST_ID}.backup" 2>/dev/null || log "Hinweis: keine Crontab fuer diesen Benutzer"
+  
   if [ "$ENABLE_VERSIONING" = "true" ]; then
     log "Bereinige alte Versionen (behalte ${VERSION_KEEP_COUNT})"
     ( cd "$BACKUP_DEST" && ls -1dt ./*/ 2>/dev/null | tail -n +$((VERSION_KEEP_COUNT + 1)) | xargs -r rm -rf -- ) || note_warn "Versionsbereinigung fehlgeschlagen"
   fi
+  
+  log "Backup ${HOSTNAME_CFG} abgeschlossen"
   return 0
 }
 

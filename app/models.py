@@ -53,6 +53,9 @@ class HostConfig:
     host_id: str
     nas_mount: str
     backup_dir_name: str = v.DEFAULT_BACKUP_DIR
+    samba_share_path: Optional[str] = None
+    samba_username: Optional[str] = None
+    samba_password: Optional[str] = None
     containers: List[ContainerConfig] = field(default_factory=list)
     db_containers: List[DbContainerConfig] = field(default_factory=list)
     host_token: str = ""
@@ -68,15 +71,18 @@ class HostConfig:
             "host_id": self.host_id,
             "nas_mount": self.nas_mount,
             "backup_dir_name": self.backup_dir_name,
-            "containers": [c.to_dict() for c in self.containers],
-            "db_containers": [{"name": d.name, "db_user": d.db_user} for d in self.db_containers],
-            "host_token": self.host_token,
-            "fingerprint": self.fingerprint,
-            "created_at": self.created_at,
-            "expected_interval_hours": self.expected_interval_hours,
-            "monitoring_paused": self.monitoring_paused,
-            "auto_update": self.auto_update,
-        }
+                "samba_share_path": self.samba_share_path,
+                "samba_username": self.samba_username,
+                "samba_password": self.samba_password,
+                "containers": [c.to_dict() for c in self.containers],
+                "db_containers": [{"name": d.name, "db_user": d.db_user} for d in self.db_containers],
+                "host_token": self.host_token,
+                "fingerprint": self.fingerprint,
+                "created_at": self.created_at,
+                "expected_interval_hours": self.expected_interval_hours,
+                "monitoring_paused": self.monitoring_paused,
+                "auto_update": self.auto_update,
+            }
 
     def public_dict(self):
         d = self.to_dict()
@@ -91,15 +97,18 @@ class HostConfig:
             host_id=str(data["host_id"]),
             nas_mount=data.get("nas_mount", "highfishNAS25"),
             backup_dir_name=str(data.get("backup_dir_name") or v.DEFAULT_BACKUP_DIR),
-            containers=[ContainerConfig.from_dict(c) for c in data.get("containers") or []],
-            db_containers=[DbContainerConfig.from_dict(d) for d in data.get("db_containers") or []],
-            host_token=data.get("host_token") or "",
-            fingerprint=data.get("fingerprint") or "",
-            created_at=data.get("created_at") or "",
-            expected_interval_hours=data.get("expected_interval_hours"),
-            monitoring_paused=bool(data.get("monitoring_paused", False)),
-            auto_update=bool(data.get("auto_update", False)),
-        )
+                samba_share_path=data.get("samba_share_path"),
+                samba_username=data.get("samba_username"),
+                samba_password=data.get("samba_password"),
+                containers=[ContainerConfig.from_dict(c) for c in data.get("containers") or []],
+                db_containers=[DbContainerConfig.from_dict(d) for d in data.get("db_containers") or []],
+                host_token=data.get("host_token") or "",
+                fingerprint=data.get("fingerprint") or "",
+                created_at=data.get("created_at") or "",
+                expected_interval_hours=data.get("expected_interval_hours"),
+                monitoring_paused=bool(data.get("monitoring_paused", False)),
+                auto_update=bool(data.get("auto_update", False)),
+            )
 
     def validate(self) -> "HostConfig":
         v.host_id(self.host_id)
