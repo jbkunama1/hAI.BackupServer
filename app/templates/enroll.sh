@@ -19,7 +19,8 @@ Verwendung: sudo ./enroll.sh [Optionen]
   --dry-run           Nur erkennen und anzeigen, nichts senden/installieren
   --yes, -y           Alle Rueckfragen mit Standardwerten beantworten
   --host-name NAME    Hostname statt "hostname -s" verwenden
-  --backup-dir NAME    Backup-Verzeichnisname (Standard: Server)
+  --backup-dir NAME   Unterordner im NAS-Pfad (Standard auf dem Server: Server;
+                      "." = direkt im NAS-Pfad). Alternativ HAI_BACKUP_DIR_NAME.
   --update-config     Bei erneutem Enroll die Container-Konfiguration auf dem Server ueberschreiben
   --run-now           Nach der Installation sofort einen Backup-Lauf starten
 
@@ -95,8 +96,24 @@ while IFS= read -r name; do
   fi
 done < <(docker ps -a --format '{{.Names}}')
 
-BACKUP_DIR_NAME="${BACKUP_DIR_ARG:-$( [ "$YES" = "true" ] && echo "Server" || ask "Backup-Verzeichnisname" Server && echo "$REPLY" || echo "Server" )}"
-PAYLOAD="{\"host_name\":\"$(json_escape "$HOST_NAME")\",\"fingerprint\":\"${FPR}\",\"update_config\":${UPDATE_CFG},\"backup_dir_name\":\"$(json_escape "$BACKUP_DIR_NAME")\",\"containers\":[${CJSON}],\"db_containers\":[${DJSON}]}"
+# Backup-Verzeichnisname: --backup-dir > HAI_BACKUP_DIR_NAME > Abfrage. Leer = Server-Standard
+# (bei neuen Hosts "Server", bestehende Hosts behalten ihren Wert).
+[ -z "$BACKUP_DIR_ARG" ] || BACKUP_DIR_NAME="$BACKUP_DIR_ARG"
+if [ -z "$BACKUP_DIR_NAME" ] && [ "$YES" != "true" ]; then
+  read -r -p "Backup-Verzeichnisname unterhalb des NAS-Pfads [Server]: " BACKUP_DIR_NAME || true
+fi
+BDIR_JSON=""
+if [ -n "$BACKUP_DIR_NAME" ]; then
+  BDIR_MSG="Ungueltiger Backup-Verzeichnisname '${BACKUP_DIR_NAME}' (erlaubt: A-Z a-z 0-9 _ . -, max. 63 Zeichen, kein '..' oder '/'; '.' = direkt im NAS-Pfad)"
+  case "$BACKUP_DIR_NAME" in
+    .) ;;
+    [A-Za-z0-9]*) case "$BACKUP_DIR_NAME" in *[!A-Za-z0-9_.-]*|*..*) die "$BDIR_MSG" ;; esac ;;
+    *) die "$BDIR_MSG" ;;
+  esac
+  [ "${#BACKUP_DIR_NAME}" -le 63 ] || die "$BDIR_MSG"
+  BDIR_JSON="\"backup_dir_name\":\"$(json_escape "$BACKUP_DIR_NAME")\","
+fi
+PAYLOAD="{\"host_name\":\"$(json_escape "$HOST_NAME")\",\"fingerprint\":\"${FPR}\",\"update_config\":${UPDATE_CFG},${BDIR_JSON}\"containers\":[${CJSON}],\"db_containers\":[${DJSON}]}"
 if [ "$DRY" = "true" ]; then
   echo "== Trockenlauf - wuerde senden an ${ORCH_URL}/api/enroll =="; echo "$PAYLOAD"; exit 0
 fi

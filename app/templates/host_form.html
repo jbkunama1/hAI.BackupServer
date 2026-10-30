@@ -7,6 +7,7 @@
   <label>Hostname<input name="host_name" value="{{ host.host_name if host else '' }}" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,62}"></label>
   <label>Host-ID (A–Z, 0–9, _ -)<input name="host_id" value="{{ host.host_id if host else '' }}" required pattern="[A-Za-z0-9_\-]{1,32}"{% if host %} readonly{% endif %}></label>
   <label>NAS-Bezeichnung<input name="nas_mount" value="{{ host.nas_mount if host else nas_mount_default }}" required></label>
+  <label>Backup-Verzeichnisname unter dem NAS-Pfad (Standard: Server; "." = direkt im NAS-Pfad)<input name="backup_dir_name" value="{{ host.backup_dir_name if host else 'Server' }}" required pattern="\.|[A-Za-z0-9][A-Za-z0-9_.\-]{0,62}"></label>
   <label>Container – eine Zeile pro Container: <code class="inline">name;/pfad1;/pfad2</code>
     <textarea name="containers_raw" rows="6">{{ containers_raw }}</textarea></label>
   <label>PostgreSQL-Container – <code class="inline">name;benutzer</code>

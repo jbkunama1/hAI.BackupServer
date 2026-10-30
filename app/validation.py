@@ -11,6 +11,9 @@ FINGERPRINT_RE = re.compile(r"^[a-f0-9]{16,64}$")
 CRON_RE = re.compile(r"^[0-9*/,\-]+( [0-9*/,\-]+){4}$")
 LABEL_RE = re.compile(r"^[A-Za-z0-9_.\- ]{1,128}$")
 FSTYPES_RE = re.compile(r"^[A-Za-z0-9_. +-]{0,100}$")
+# Einzelner Verzeichnisname unterhalb des NAS-Basispfads ("." = direkt im Basispfad, Altlayout).
+DIR_NAME_RE = re.compile(r"(?:[.]|[A-Za-z0-9][A-Za-z0-9_.-]{0,62})")
+DEFAULT_BACKUP_DIR = "Server"
 
 FORBIDDEN_EXACT = {
     "/", "/etc", "/root", "/boot", "/run", "/var", "/var/run", "/usr", "/bin",
@@ -55,6 +58,17 @@ def fingerprint(v):
 
 def label(v):
     return _match(LABEL_RE, v, "Bezeichnung")
+
+
+def dir_name(v):
+    """Ein einzelner Verzeichnisname (kein Pfad): alphanumerischer Beginn, kein '..', kein '/'.
+
+    Ausnahme: genau "." legt Backups direkt unter dem NAS-Basispfad ab (Altlayout).
+    """
+    if not isinstance(v, str) or not DIR_NAME_RE.fullmatch(v) or ".." in v:
+        raise ValidationError("Ungueltiger Wert fuer Backup-Verzeichnisname "
+                              "(erlaubt: A-Z a-z 0-9 _ . -, max. 63 Zeichen, kein '..' oder '/')")
+    return v
 
 
 def cron_schedule(v):
