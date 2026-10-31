@@ -24,7 +24,7 @@
 | 🖥️ Adminmenü | Dashboard, Monitoring-Historie, Host-Verwaltung, Einrichtungs-Anleitung, Einstellungen, Audit-Log |
 | 🚀 Enrollment | `enroll.sh`: erkennt Container und Datenpfade, registriert den Host, richtet Script + Cron ein |
 | 🧩 Bootstrap | Host manuell anlegen und individuelles Installationsscript laden – parallel zu Enroll nutzbar |
-| 📦 Backup | Container-Images, mehrere Datenpfade je Container, PostgreSQL-Dumps, Crontab |
+| 📦 Backup | Container-Images, mehrere Datenpfade je Container, PostgreSQL-Dumps, Crontab, /home-Verzeichnis, benutzerdefinierte Scripte |
 | 🛡️ Schutz | Abbruch ohne NAS-Mount, Lock gegen Überlappung, Warnung statt falschem „OK“ |
 | 📊 Monitoring | Läufe mit Historie, Zustände (OK, Warnung, Fehler, überfällig, unklar, pausiert) |
 | 🤖 Telegram | Fehler sofort, Erfolge als Tagesdigest, Adminmenü mit Bestätigungen |

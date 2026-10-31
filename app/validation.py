@@ -11,6 +11,9 @@ FINGERPRINT_RE = re.compile(r"^[a-f0-9]{16,64}$")
 CRON_RE = re.compile(r"^[0-9*/,\-]+( [0-9*/,\-]+){4}$")
 LABEL_RE = re.compile(r"^[A-Za-z0-9_.\- ]{1,128}$")
 FSTYPES_RE = re.compile(r"^[A-Za-z0-9_. +-]{0,100}$")
+# Einzelner Verzeichnisname unterhalb des NAS-Basispfads ("." = direkt im Basispfad, Altlayout).
+DIR_NAME_RE = re.compile(r"(?:[.]|[A-Za-z0-9][A-Za-z0-9_.-]{0,62})")
+DEFAULT_BACKUP_DIR = "Server"
 
 FORBIDDEN_EXACT = {
     "/", "/etc", "/root", "/boot", "/run", "/var", "/var/run", "/usr", "/bin",
@@ -57,6 +60,17 @@ def label(v):
     return _match(LABEL_RE, v, "Bezeichnung")
 
 
+def dir_name(v):
+    """Ein einzelner Verzeichnisname (kein Pfad): alphanumerischer Beginn, kein '..', kein '/'.
+
+    Ausnahme: genau "." legt Backups direkt unter dem NAS-Basispfad ab (Altlayout).
+    """
+    if not isinstance(v, str) or not DIR_NAME_RE.fullmatch(v) or ".." in v:
+        raise ValidationError("Ungueltiger Wert fuer Backup-Verzeichnisname "
+                              "(erlaubt: A-Z a-z 0-9 _ . -, max. 63 Zeichen, kein '..' oder '/')")
+    return v
+
+
 def cron_schedule(v):
     return _match(CRON_RE, v, "Cron-Ausdruck (5 Felder)")
 
@@ -92,6 +106,27 @@ def number(v, label_, lo, hi, default=None):
         raise ValidationError(f"{label_} muss zwischen {lo} und {hi} liegen")
     return f
 
+def samba_share_path(v):
+    """Samba-Share-Pfad (z.B. //server/share/backup)"""
+    if not isinstance(v, str) or not v.startswith("//"):
+        raise ValidationError("Samba-Share muss mit // beginnen (z.B. //server/share/backup)")
+    if len(v) > 1024:
+        raise ValidationError("Samba-Share-Pfad zu lang")
+    return v
+
+def samba_username(v):
+    """Samba-Benutzername"""
+    if not isinstance(v, str) or len(v) == 0 or len(v) > 64:
+        raise ValidationError("Samba-Benutzername muss 1-64 Zeichen lang sein")
+    return v
+
+def samba_password(v):
+    """Samba-Passwort (leer wird erlaubt, da user es nicht angeben muss)"""
+    if not isinstance(v, str):
+        raise ValidationError("Samba-Passwort muss ein String sein")
+    if len(v) > 1024:
+        raise ValidationError("Samba-Passwort zu lang")
+    return v
 
 def slug(name):
     s = re.sub(r"[^a-z0-9_-]+", "-", str(name).lower()).strip("-")

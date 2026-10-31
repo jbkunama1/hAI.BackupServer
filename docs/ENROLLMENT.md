@@ -1,9 +1,33 @@
 # Enrollment
 
 `enroll.sh` ist ein universelles Script ohne Zugangsdaten. Es erkennt Container, zeigt sie zur Bestätigung an,
-registriert den Host und richtet Script und Cronjob ein.
+registriert den Host und richtet Script und Cronjob ein. Benutzer können optional einen benutzerdefinierten Backup-Verzeichnisnamen angeben.
 
 ## Ablauf
+
+## Backup-Verzeichnis
+
+Wenn nach dem Hostnamen gefragt wird, kann ein benutzerdefinierter Backup-Verzeichnisname angegeben werden.
+Standard ist "Server".
+
+**Beispiel:**
+```bash
+sudo ./enroll.sh --host-name web01 --backup-dir "WebServer"
+# Backup-Verzeichnis: /mnt/highfishNAS25/WebServer/web01/
+```
+
+## Automatische Sicherungen
+
+Das generierte Backup-Script sichert automatisch:
+- Alle konfigurierten Container mit ihren Volumes
+- Container-Datenbanken (via pg_dump)
+- **Ganzes /home-Verzeichnis** (immer, wenn vorhanden)
+- Crontab des Hosts
+
+## Benutzerdefinierte Backup-Scripte
+
+Falls ein Script `/home/Scripts/full_backup.sh` existiert, zeigt enroll.sh dessen ersten 20 Zeilen zur Prüfung an.
+Benutzer können entscheiden, ob die Ausgaben dieses Scripts sichergestellt werden sollen (Infozweck, keine Integration).
 
 1. Serverseitig `ENROLL_TOKEN` setzen (lange Zufallszeichenfolge, `openssl rand -hex 24`); ohne Token ist Enrollment aus.
 2. Auf dem Host: Script laden, ansehen, `--dry-run`, dann ausführen. Das Token wird abgefragt oder aus der Umgebungsvariable `ENROLL_TOKEN` gelesen – nicht als Argument übergeben.

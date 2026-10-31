@@ -137,46 +137,61 @@ class Service:
     def enroll(self, payload: dict, update_config: bool = False) -> dict:
         fpr = v.fingerprint(str(payload.get("fingerprint", "")))
         name = v.host_name(str(payload.get("host_name", "")))
-        containers, rejected = [], []
-        for c in payload.get("containers") or []:
-            try:
-                paths = []
-                for p in c.get("volume_paths") or []:
-                    try:
-                        paths.append(v.path(p))
-                    except v.ValidationError:
-                        rejected.append(str(p)[:200])
-                containers.append(ContainerConfig(name=v.container_name(c.get("name")), volume_paths=paths))
-            except (v.ValidationError, AttributeError):
-                rejected.append(str(c)[:200])
-        dbs = []
-        for d in payload.get("db_containers") or []:
-            dbs.append(DbContainerConfig(name=v.container_name(d.get("name")), db_user=v.db_user(d.get("db_user") or "postgres")))
-        mon_nas = self.cfg().get("nas_mount_default", "highfishNAS25")
+        backup_dir_name = v.label(str(payload.get("backup_dir_name", "Server")))
+            samba_share_path = None
+            if payload.get("samba_share_path"):
+                samba_share_path = v.samba_share_path(str(payload.get("samba_share_path")))
+            samba_username = None
+            if payload.get("samba_username"):
+                samba_username = v.samba_username(str(payload.get("samba_username")))
+            samba_password = None
+            if payload.get("samba_password"):
+                samba_password = v.samba_password(str(payload.get("samba_password")))
+            containers, rejected = [], []
+            for c in payload.get("containers") or []:
+                try:
+                    paths = []
+                    for p in c.get("volume_paths") or []:
+                        try:
+                            paths.append(v.path(p))
+                        except v.ValidationError:
+                            rejected.append(str(p)[:200])
+                    containers.append(ContainerConfig(name=v.container_name(c.get("name")), volume_paths=paths))
+                except (v.ValidationError, AttributeError):
+                    rejected.append(str(c)[:200])
+            dbs = []
+            for d in payload.get("db_containers") or []:
+                dbs.append(DbContainerConfig(name=v.container_name(d.get("name")), db_user=v.db_user(d.get("db_user") or "postgres")))
+            mon_nas = self.cfg().get("nas_mount_default", "highfishNAS25")
 
-        def fn(cfg):
-            hosts = cfg.setdefault("hosts", [])
-            for h in hosts:
-                if h.get("fingerprint") == fpr:
-                    changed = False
-                    if update_config:
-                        h["host_name"] = name
-                        h["containers"] = [c.to_dict() for c in containers]
-                        h["db_containers"] = [{"name": d.name, "db_user": d.db_user} for d in dbs]
-                        changed = True
-                    return h["host_id"], h["host_token"], False, changed
-            taken = {str(h.get("host_id")) for h in hosts}
-            base, hid, n = v.slug(name), v.slug(name), 2
-            while hid in taken:
-                hid = f"{base[:28]}-{n}"
-                n += 1
-            token = secrets.token_urlsafe(24)
-            host = HostConfig(host_name=name, host_id=hid, nas_mount=mon_nas, containers=containers,
-                              db_containers=dbs, host_token=token, fingerprint=fpr, created_at=now_iso())
-            hosts.append(host.validate().to_dict())
-            return hid, token, True, True
-        hid, token, created, changed = self.config.update(fn)
-        self.store.audit("enroll", "host_enroll", hid, f"created={created} config_updated={changed} rejected={len(rejected)}")
+            def fn(cfg):
+                hosts = cfg.setdefault("hosts", [])
+                for h in hosts:
+                    if h.get("fingerprint") == fpr:
+                        changed = False
+                        if update_config:
+                            h["host_name"] = name
+                            h["backup_dir_name"] = backup_dir_name
+                            h["samba_share_path"] = samba_share_path
+                            h["samba_username"] = samba_username
+                            h["samba_password"] = samba_password
+                            h["containers"] = [c.to_dict() for c in containers]
+                            h["db_containers"] = [{"name": d.name, "db_user": d.db_user} for d in dbs]
+                            changed = True
+                        return h["host_id"], h["host_token"], False, changed
+                taken = {str(h.get("host_id")) for h in hosts}
+                base, hid, n = v.slug(name), v.slug(name), 2
+                while hid in taken:
+                    hid = f"{base[:28]}-{n}"
+                    n += 1
+                token = secrets.token_urlsafe(24)
+                host = HostConfig(host_name=name, host_id=hid, nas_mount=mon_nas, backup_dir_name=backup_dir_name,
+                                 samba_share_path=samba_share_path, samba_username=samba_username, samba_password=samba_password,
+                                 containers=containers, db_containers=dbs, host_token=token, fingerprint=fpr, created_at=now_iso())
+                hosts.append(host.validate().to_dict())
+                return hid, token, True, True
+            hid, token, created, changed = self.config.update(fn)
+            self.store.audit("enroll", "host_enroll", hid, f"created={created} config_updated={changed} rejected={len(rejected)}")
         return {"host_id": hid, "host_token": token, "created": created, "config_updated": changed,
                 "cron_schedule": self.cron_schedule, "rejected_paths": rejected}
 

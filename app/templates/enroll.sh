@@ -9,6 +9,7 @@ set -euo pipefail
 ORCH_URL=@@ORCH_URL@@
 TARGET_DIR="${HAI_TARGET_DIR:-/opt/backup}"
 CRON_DIR="${HAI_CRON_DIR:-/etc/cron.d}"
+BACKUP_DIR_NAME="${HAI_BACKUP_DIR_NAME:-}"
 
 usage() {
   cat <<'EOF'
@@ -18,6 +19,11 @@ Verwendung: sudo ./enroll.sh [Optionen]
   --dry-run           Nur erkennen und anzeigen, nichts senden/installieren
   --yes, -y           Alle Rueckfragen mit Standardwerten beantworten
   --host-name NAME    Hostname statt "hostname -s" verwenden
+  --backup-dir NAME   Unterordner im NAS-Pfad (Standard auf dem Server: Server;
+                      "." = direkt im NAS-Pfad). Alternativ HAI_BACKUP_DIR_NAME.
+  --samba-share PATH  Samba-Share-Pfad (z.B. //server/share/backup)
+  --samba-user USER   Samba-Benutzername
+  --samba-pass PASS   Samba-Passwort
   --update-config     Bei erneutem Enroll die Container-Konfiguration auf dem Server ueberschreiben
   --run-now           Nach der Installation sofort einen Backup-Lauf starten
 
@@ -28,7 +34,7 @@ Das Script richtet KEINEN NAS-Mount ein - der Zielpfad muss bereits gemountet se
 EOF
 }
 
-YES=false; DRY=false; RUN_NOW=false; UPDATE_CFG=false; HOST_NAME_ARG=""
+YES=false; DRY=false; RUN_NOW=false; UPDATE_CFG=false; HOST_NAME_ARG=""; BACKUP_DIR_ARG=""; SAMBA_SHARE_ARG=""; SAMBA_USER_ARG=""; SAMBA_PASS_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
@@ -37,6 +43,10 @@ while [ $# -gt 0 ]; do
     --run-now) RUN_NOW=true ;;
     --update-config) UPDATE_CFG=true ;;
     --host-name) HOST_NAME_ARG="${2:-}"; shift ;;
+    --backup-dir) BACKUP_DIR_ARG="${2:-}"; shift ;;
+    --samba-share) SAMBA_SHARE_ARG="${2:-}"; shift ;;
+    --samba-user) SAMBA_USER_ARG="${2:-}"; shift ;;
+    --samba-pass) SAMBA_PASS_ARG="${2:-}"; shift ;;
     *) echo "Unbekannte Option: $1" >&2; usage >&2; exit 2 ;;
   esac
   shift
@@ -92,7 +102,47 @@ while IFS= read -r name; do
   fi
 done < <(docker ps -a --format '{{.Names}}')
 
-PAYLOAD="{\"host_name\":\"$(json_escape "$HOST_NAME")\",\"fingerprint\":\"${FPR}\",\"update_config\":${UPDATE_CFG},\"containers\":[${CJSON}],\"db_containers\":[${DJSON}]}"
+# Backup-Verzeichnisname: --backup-dir > HAI_BACKUP_DIR_NAME > Abfrage. Leer = Server-Standard
+# (bei neuen Hosts "Server", bestehende Hosts behalten ihren Wert).
+[ -z "$BACKUP_DIR_ARG" ] || BACKUP_DIR_NAME="$BACKUP_DIR_ARG"
+if [ -z "$BACKUP_DIR_NAME" ] && [ "$YES" != "true" ]; then
+  read -r -p "Backup-Verzeichnisname unterhalb des NAS-Pfads [Server]: " BACKUP_DIR_NAME || true
+fi
+BDIR_JSON=""
+if [ -n "$BACKUP_DIR_NAME" ]; then
+  BDIR_MSG="Ungueltiger Backup-Verzeichnisname '${BACKUP_DIR_NAME}' (erlaubt: A-Z a-z 0-9 _ . -, max. 63 Zeichen, kein '..' oder '/'; '.' = direkt im NAS-Pfad)"
+  case "$BACKUP_DIR_NAME" in
+    .) ;;
+    [A-Za-z0-9]*) case "$BACKUP_DIR_NAME" in *[!A-Za-z0-9_.-]*|*..*) die "$BDIR_MSG" ;; esac ;;
+    *) die "$BDIR_MSG" ;;
+  esac
+  [ "${#BACKUP_DIR_NAME}" -le 63 ] || die "$BDIR_MSG"
+  BDIR_JSON="\"backup_dir_name\":\"$(json_escape "$BACKUP_DIR_NAME")\","
+fi
+
+# Samba-Share: Parameter oder interaktive Eingabe
+[ -z "$SAMBA_SHARE_ARG" ] || SAMBA_SHARE_PATH="$SAMBA_SHARE_ARG"
+[ -z "$SAMBA_USER_ARG" ] || SAMBA_USERNAME="$SAMBA_USER_ARG"
+[ -z "$SAMBA_PASS_ARG" ] || SAMBA_PASSWORD="$SAMBA_PASS_ARG"
+if [ -z "$SAMBA_SHARE_PATH" ] && [ "$YES" != "true" ]; then
+  read -r -p "Samba-Share-Pfad (z.B. //server/share/backup) [leer=Samba wird nicht verwendet]: " SAMBA_SHARE_PATH || true
+fi
+if [ -n "$SAMBA_SHARE_PATH" ]; then
+  if [ -z "$SAMBA_USERNAME" ] && [ "$YES" != "true" ]; then
+    read -r -p "Samba-Benutzername: " SAMBA_USERNAME || true
+  fi
+  if [ -z "$SAMBA_PASSWORD" ] && [ "$YES" != "true" ]; then
+    read -r -s -p "Samba-Passwort: " SAMBA_PASSWORD; echo || true
+  fi
+  if [ -n "$SAMBA_USERNAME" ] && [ -z "$SAMBA_PASSWORD" ]; then
+    die "Samba-Benutzer angegeben, aber kein Passwort."
+  fi
+  SAMBA_JSON="\"samba_share_path\":\"$(json_escape "$SAMBA_SHARE_PATH)\",\"samba_username\":\"$(json_escape "$SAMBA_USERNAME")\",\"samba_password\":\"$(json_escape "$SAMBA_PASSWORD")\","
+else
+  SAMBA_JSON=""
+fi
+
+PAYLOAD="{\"host_name\":\"$(json_escape "$HOST_NAME")\",\"fingerprint\":\"${FPR}\",\"update_config\":${UPDATE_CFG},${BDIR_JSON}${SAMBA_JSON}\"containers\":[${CJSON}],\"db_containers\":[${DJSON}]}"
 if [ "$DRY" = "true" ]; then
   echo "== Trockenlauf - wuerde senden an ${ORCH_URL}/api/enroll =="; echo "$PAYLOAD"; exit 0
 fi
